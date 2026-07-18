@@ -26,6 +26,14 @@
     "rpgmaker"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xerolo44/RPG-Maker-MV-MCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Xerolo44/RPG-Maker-MV-MCP/issues"
+  },
+  "homepage": "https://github.com/Xerolo44/RPG-Maker-MV-MCP#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "selfsigned": "^5.5.0",

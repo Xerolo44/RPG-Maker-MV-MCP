@@ -1,5 +1,6 @@
 # RPG Maker MV MCP Server
 
+[![CI](https://github.com/Xerolo44/RPG-Maker-MV-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/Xerolo44/RPG-Maker-MV-MCP/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](package.json)
 [![MCP](https://img.shields.io/badge/protocol-Model%20Context%20Protocol-blueviolet)](https://modelcontextprotocol.io)
@@ -75,10 +76,10 @@ Add to `claude_desktop_config.json`:
 `--project` is optional — without it, ask the assistant to call `set_project` first. The
 project can also be switched mid-session.
 
-### Custom connector / URL-based clients (HTTPS)
+### Custom connector / URL-based clients (HTTPS) — experimental
 
-Some clients (e.g. Claude's "Add custom connector" UI) don't spawn a local process — they
-connect to a URL instead. Run the server in HTTPS mode:
+Some clients (e.g. "Add custom connector" UIs) don't spawn a local process — they connect
+to a URL instead. Run the server in HTTPS mode:
 
 ```sh
 node dist/index.js --http [port]   # default port 3939
@@ -88,8 +89,18 @@ This starts a Streamable HTTP MCP endpoint at `https://127.0.0.1:<port>/mcp`, bo
 localhost only (never reachable from the network — every request is checked against the
 connecting socket's address, not just the bind address). A self-signed TLS certificate for
 `localhost`/`127.0.0.1` is generated on first run and cached in `.certs/` (gitignored) next
-to the project. Your client will show an "untrusted certificate" warning the first time —
-that's expected for a local-only server signed by no one but itself; accept it to proceed.
+to the project.
+
+**Status:** the endpoint is fully verified at the protocol level (handshake, session
+management, and all 41 tools tested directly over HTTPS with `curl`). What's *not*
+guaranteed is that a given GUI connector-adding flow will accept a self-signed localhost
+certificate — some do (after a manual "proceed anyway" warning, since they open the URL as
+a normal page), others silently reject it because their background connection check doesn't
+trust locally-generated certs and gives no user-facing error. If adding the connector spins
+and fails with no message, that's very likely what's happening, and it's a limitation of
+that client's trust handling, not of this server. The reliable, zero-friction way to use
+this server today is the stdio mode above (Claude Code CLI / Claude Desktop's local server
+config) — reach for `--http` only if your client specifically requires a URL.
 
 The server process must stay running for the connector to work — start it in its own
 terminal window before adding the connector, and leave that window open.
@@ -143,8 +154,10 @@ npm run build   # compile TypeScript to dist/
 npm run smoke   # end-to-end test: real stdio client against a generated MV project
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and guidelines, and
-[CHANGELOG.md](CHANGELOG.md) for release history.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and guidelines,
+[CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for the
+tool's trust model (it has full file-system access — read this before exposing `--http`
+mode beyond your own machine).
 
 ## License
 
