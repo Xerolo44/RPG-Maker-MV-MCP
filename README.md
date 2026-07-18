@@ -42,20 +42,23 @@ Ask your assistant things like:
 
 Requires Node.js 18+.
 
-```sh
-git clone <this repo>
-cd RPG-Maker-MV-MCP
-npm install
-npm run build
-```
+### Quick start (npm)
 
-### Claude Code
+The easiest way for Claude Code or Claude Desktop users:
 
 ```sh
-claude mcp add rpgmaker-mv -- node "/path/to/RPG-Maker-MV-MCP/dist/index.js" --project "/path/to/YourGame"
+npm install -g @xerolo44/rpgmaker-mv-mcp
 ```
 
-### Claude Desktop
+Then configure it (see below). The package is available on [npmjs.com](https://www.npmjs.com/package/@xerolo44/rpgmaker-mv-mcp) and in the [MCP Registry](https://registry.modelcontextprotocol.io/).
+
+### Configure Claude Code
+
+```sh
+claude mcp add rpgmaker-mv -- npx @xerolo44/rpgmaker-mv-mcp --project "/path/to/YourGame"
+```
+
+### Configure Claude Desktop
 
 Add to `claude_desktop_config.json`:
 
@@ -63,9 +66,9 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "rpgmaker-mv": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/path/to/RPG-Maker-MV-MCP/dist/index.js",
+        "@xerolo44/rpgmaker-mv-mcp",
         "--project", "/path/to/YourGame"
       ]
     }
@@ -146,6 +149,23 @@ Add `.mcp-backups/` to your game project's `.gitignore` if the game is under ver
   `Game.exe`, and the `RPGMAKER_MV_NWJS` environment variable, in that order.
 - In browser playtest mode, console output stays in the browser devtools — use NW.js mode
   when you need `playtest_log`.
+
+## Building from source
+
+For contributors or if you prefer to build locally:
+
+```sh
+git clone https://github.com/Xerolo44/RPG-Maker-MV-MCP.git
+cd RPG-Maker-MV-MCP
+npm install
+npm run build
+```
+
+Then use the local build with Claude Code:
+
+```sh
+claude mcp add rpgmaker-mv -- node "$(pwd)/dist/index.js" --project "/path/to/YourGame"
+```
 
 ## Development
 
