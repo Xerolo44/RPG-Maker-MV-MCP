@@ -5,6 +5,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mv-mcp-smoke-"));
 const dataDir = path.join(tmp, "data");
@@ -45,7 +48,7 @@ await fs.writeFile(path.join(tmp, "js", "plugins.js"),
 const client = new Client({ name: "smoke", version: "0.0.0" });
 await client.connect(new StdioClientTransport({
   command: process.execPath,
-  args: [path.join(import.meta.dirname, "..", "dist", "index.js")],
+  args: [path.join(scriptDir, "..", "dist", "index.js")],
 }));
 
 let failures = 0;
