@@ -75,6 +75,25 @@ Add to `claude_desktop_config.json`:
 `--project` is optional — without it, ask the assistant to call `set_project` first. The
 project can also be switched mid-session.
 
+### Custom connector / URL-based clients (HTTPS)
+
+Some clients (e.g. Claude's "Add custom connector" UI) don't spawn a local process — they
+connect to a URL instead. Run the server in HTTPS mode:
+
+```sh
+node dist/index.js --http [port]   # default port 3939
+```
+
+This starts a Streamable HTTP MCP endpoint at `https://127.0.0.1:<port>/mcp`, bound to
+localhost only (never reachable from the network — every request is checked against the
+connecting socket's address, not just the bind address). A self-signed TLS certificate for
+`localhost`/`127.0.0.1` is generated on first run and cached in `.certs/` (gitignored) next
+to the project. Your client will show an "untrusted certificate" warning the first time —
+that's expected for a local-only server signed by no one but itself; accept it to proceed.
+
+The server process must stay running for the connector to work — start it in its own
+terminal window before adding the connector, and leave that window open.
+
 ## Tool reference (41 tools)
 
 | Group | Tools |

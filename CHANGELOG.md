@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `--http [port]` mode: exposes the server as a Streamable HTTP + HTTPS endpoint
+  (`https://127.0.0.1:<port>/mcp`) for URL-based/custom-connector MCP clients, alongside the
+  existing stdio mode. Bound to localhost only, with a per-connection remote-address check.
+  Uses a self-signed certificate for `localhost`/`127.0.0.1`, generated once and cached in
+  `.certs/`.
+
 ## [0.1.0] - 2026-07-18
 
 Initial release. 41 tools across eight groups:
