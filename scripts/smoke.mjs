@@ -235,6 +235,116 @@ const validation = await call("validate_project", {},
   (t) => t.includes('"ok": true') && t.includes("transfers the player to map 99"));
 if (!validation.includes('"errors": []')) { console.log("FAIL validation should have no errors"); failures++; }
 
+// map preview as PNG
+{
+  const r = await client.callTool({ name: "render_map_image", arguments: { mapId: 1, tileSize: 16, showGrid: true } });
+  const png = r.content?.find((c) => c.type === "image");
+  const bytes = png ? Buffer.from(png.data, "base64") : Buffer.alloc(0);
+  const isPng = bytes.length > 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const dims = isPng ? [bytes.readUInt32BE(16), bytes.readUInt32BE(20)] : [0, 0];
+  const ok = !r.isError && isPng && dims[0] === 160 && dims[1] === 160 && r.content[0].text.includes("Events in view");
+  console.log(`${ok ? "PASS" : "FAIL"} render_map_image returns a 160x160 PNG with an event list`);
+  if (!ok) { failures++; console.log("    ", r.content?.[0]?.text?.slice(0, 300)); }
+}
+await expectError("render_map_image outside the map errors", "render_map_image", { mapId: 1, x: 50 }, "outside");
+
+// map connector
+await call("connect_maps", {
+  a: { mapId: 1, door: { x: 8, y: 8 }, spawn: { x: 8, y: 7, direction: 8 } },
+  b: { mapId: 2, door: { x: 5, y: 5 }, spawn: { x: 5, y: 6, direction: 2 } },
+}, (t) => t.includes('"leadsTo"') && (t.match(/"eventId"/g) ?? []).length === 2);
+await expectError("connect_maps refuses a door on an occupied tile", "connect_maps", {
+  a: { mapId: 1, door: { x: 8, y: 8 } }, b: { mapId: 2, door: { x: 9, y: 9 } } }, "already has");
+await expectError("connect_maps refuses doors outside the map", "connect_maps", {
+  a: { mapId: 1, door: { x: 40, y: 8 } }, b: { mapId: 2, door: { x: 9, y: 9 } } }, "outside");
+await call("list_map_connections", {}, (t) =>
+  t.includes("-> map 2") && t.includes("-> map 1") && t.includes("missing map 99"));
+
+// bulk edits, curves, balance report, battle simulation
+const priceOf = async () => Number(/"price": (\d+)/.exec(await call("get_record", { type: "items", id: 1 }))[1]);
+await call("bulk_update_records", { type: "items", changes: [{ field: "price", op: "percent", value: 10 }] },
+  (t) => t.includes('"dryRun": true') && t.includes('"after": 55'));
+if ((await priceOf()) !== 50) { console.log("FAIL dry run must not write"); failures++; } else console.log("PASS bulk dry run leaves data untouched");
+await call("bulk_update_records", { type: "items", ids: [1], changes: [{ field: "price", op: "percent", value: 10 }], dryRun: false },
+  (t) => t.includes('"applied": true'));
+if ((await priceOf()) !== 55) { console.log("FAIL bulk apply"); failures++; } else console.log("PASS bulk apply writes the new value");
+await expectError("bulk edit of a missing field writes nothing", "bulk_update_records",
+  { type: "items", changes: [{ field: "nothing.here", op: "add", value: 1 }], dryRun: false }, "No changes written");
+await call("generate_param_curve", { curves: [{ param: "mhp", start: 100, end: 1000, shape: "linear" }] },
+  (t) => t.includes('"applied": false') && t.includes("1000"));
+const classParams = (value) => Array.from({ length: 8 }, () => new Array(100).fill(value));
+await call("create_record", { type: "classes", data: {
+  name: "Fighter", params: classParams(10), traits: [{ code: 22, dataId: 0, value: 1 }],
+  learnings: [], expParams: [30, 20, 30, 30], note: "" } }, (t) => t.includes('"id": 1'));
+await call("generate_param_curve", { classId: 1, dryRun: false, curves: [
+  { param: "mhp", start: 200, end: 2000, shape: "ease-out" }, { param: "mat", start: 20, end: 200 }] },
+  (t) => t.includes('"applied": true'));
+await call("get_record", { type: "classes", id: 1 }, (t) => t.includes("2000"));
+await call("create_record", { type: "enemies", data: {
+  name: "Dummy", battlerName: "", battlerHue: 0, params: [60, 0, 10, 10, 10, 10, 10, 10], exp: 10, gold: 5,
+  dropItems: [], traits: [],
+  actions: [{ skillId: 1, rating: 5, conditionType: 0, conditionParam1: 0, conditionParam2: 0 }], note: "" } },
+  (t) => t.includes('"id": 1'));
+await call("create_record", { type: "troops", data: {
+  name: "Dummy x1", members: [{ enemyId: 1, x: 200, y: 200, hidden: false }], pages: [] } },
+  (t) => t.includes('"id": 1'));
+await call("balance_report", {}, (t) => t.includes("classCurves") && t.includes("Dummy") && t.includes("hit"));
+await call("simulate_battle", { troopId: 1, party: [{ actorId: 1, level: 20, skillIds: [1] }], runs: 40 },
+  (t) => t.includes('"winRatePercent"') && t.includes('"verdict"') && t.includes("sampleBattle"));
+await call("generate_enemy_scaling", { enemyIds: [1], curves: [{ param: "exp", start: 5, end: 50 }] },
+  (t) => t.includes('"dryRun": true'));
+
+// localization round trip
+await call("export_texts", { format: "json", file: "localization/smoke.json" },
+  (t) => t.includes('"total"') && t.includes("localization/smoke.json"));
+{
+  const file = path.join(tmp, "localization", "smoke.json");
+  const rows = JSON.parse(await fs.readFile(file, "utf8"));
+  const fireball = rows.find((r) => r.key === "Skills/1/name");
+  const halt = rows.find((r) => r.original === "Halt! Who goes there?");
+  if (!fireball || !halt) { console.log("FAIL export contains skill name and dialogue"); failures++; }
+  else {
+    console.log("PASS export contains skill name and dialogue");
+    fireball.translation = "Feuerball";
+    halt.translation = "Halt!\nWer da?\nZeile drei\nZeile vier\nZeile fuenf";
+    await fs.writeFile(file, JSON.stringify(rows));
+    await call("import_texts", { file: "localization/smoke.json" },
+      (t) => t.includes('"dryRun": true') && t.includes('"wouldApply": 2'));
+    await call("get_record", { type: "skills", id: 1 }, (t) => t.includes("Fireball"));
+    await call("import_texts", { file: "localization/smoke.json", dryRun: false },
+      (t) => t.includes('"applied": 2'));
+    await call("get_record", { type: "skills", id: 1 }, (t) => t.includes("Feuerball"));
+    await call("search_map_events", { query: "fuenf", searchCommands: true }, (t) => t.includes("command 401"));
+  }
+}
+await expectError("export_texts refuses paths outside the project", "export_texts", { file: "../evil.csv" }, "outside the project");
+
+// skills, resources and prompts
+await call("install_skills", {}, (t) => t.includes("rpgmaker-balancing"));
+try {
+  await fs.access(path.join(tmp, ".claude", "skills", "rpgmaker-balancing", "SKILL.md"));
+  console.log("PASS install_skills wrote SKILL.md into the project");
+} catch { console.log("FAIL install_skills wrote SKILL.md"); failures++; }
+await call("install_skills", { skills: ["rpgmaker-balancing"] }, (t) => t.includes("skippedBecauseTheyExist"));
+{
+  const resources = (await client.listResources()).resources.map((r) => r.uri);
+  const have = resources.includes("rpgmaker://skills/rpgmaker-map-building") && resources.includes("rpgmaker://reference/trait-codes");
+  console.log(`${have ? "PASS" : "FAIL"} resources list skills and references`);
+  if (!have) failures++;
+  const skill = await client.readResource({ uri: "rpgmaker://skills/rpgmaker-localization" });
+  const readable = skill.contents[0].text.includes("export_texts");
+  console.log(`${readable ? "PASS" : "FAIL"} skill resource is readable`);
+  if (!readable) failures++;
+  const prompts = (await client.listPrompts()).prompts.map((p) => p.name);
+  const hasPrompts = ["new_town", "balance_check", "translate_game", "project_health"].every((n) => prompts.includes(n));
+  console.log(`${hasPrompts ? "PASS" : "FAIL"} prompts are listed`);
+  if (!hasPrompts) failures++;
+  const prompt = await client.getPrompt({ name: "new_town", arguments: { name: "Willowbrook" } });
+  const promptOk = prompt.messages[0].content.text.includes("Willowbrook");
+  console.log(`${promptOk ? "PASS" : "FAIL"} prompt renders its arguments`);
+  if (!promptOk) failures++;
+}
+
 // backups: mangle a record, then restore it
 await call("list_backups", {}, (t) => t.includes("data/Actors.json"));
 await call("update_record", { type: "actors", id: 1, data: { name: "RUINED" } },

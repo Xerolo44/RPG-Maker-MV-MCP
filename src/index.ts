@@ -10,16 +10,21 @@ import { registerProjectTools } from "./tools/projectTools.js";
 import { registerDatabaseTools } from "./tools/databaseTools.js";
 import { registerMapTools } from "./tools/mapTools.js";
 import { registerTileTools } from "./tools/tileTools.js";
+import { registerRenderTools } from "./tools/renderTools.js";
 import { registerPluginTools } from "./tools/pluginTools.js";
 import { registerPlaytestTools } from "./tools/playtestTools.js";
 import { registerSkillTools } from "./tools/skillTools.js";
 import { registerSearchTools } from "./tools/searchTools.js";
 import { registerMaintenanceTools } from "./tools/maintenanceTools.js";
+import { registerConnectTools } from "./tools/connectTools.js";
+import { registerBalanceTools } from "./tools/balanceTools.js";
+import { registerLocalizationTools } from "./tools/localizationTools.js";
+import { registerKnowledge } from "./knowledge.js";
 
 async function main(): Promise<void> {
   const server = new McpServer({
     name: "rpgmaker-mv-mcp",
-    version: "0.2.0",
+    version: "0.3.0",
   });
 
   const project = new Project();
@@ -40,11 +45,16 @@ async function main(): Promise<void> {
   registerDatabaseTools(server, project);
   registerMapTools(server, project);
   registerTileTools(server, project);
+  registerRenderTools(server, project);
   registerPluginTools(server, project);
   registerPlaytestTools(server, project);
   registerSkillTools(server, project);
   registerSearchTools(server, project);
   registerMaintenanceTools(server, project);
+  registerConnectTools(server, project);
+  registerBalanceTools(server, project);
+  registerLocalizationTools(server, project);
+  registerKnowledge(server, project);
 
   const httpFlag = args.indexOf("--http");
   if (httpFlag !== -1) {

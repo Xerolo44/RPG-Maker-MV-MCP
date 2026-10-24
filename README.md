@@ -32,6 +32,22 @@ Ask your assistant things like:
   at its sheet images, switch a map's tileset, and paint ground, water, walls and objects with
   rectangles, flood fill and single cells. Autotile edges and corners are computed exactly like
   the editor does, so painted maps look right in game. `render_map` shows the result as text.
+- **See your maps** — `render_map_image` renders a map to a PNG with the real tileset graphics,
+  autotiles, shadows, event sprites, numbered event markers, region ids and an optional grid, so
+  the assistant can look at what it built instead of working blind.
+- **Map connector** — `connect_maps` places Transfer Player doors on two maps in both
+  directions in one call (with spawn tiles, fades and sounds); `list_map_connections` shows the
+  map graph, one-way doors, broken targets and maps you cannot reach.
+- **Bulk edits and balancing** — `bulk_update_records` ("all weapons +10% attack") with a
+  dry-run diff, `generate_param_curve` / `generate_enemy_scaling` for stat curves,
+  `balance_report` (class curves, damage vs enemy HP, enemy threat) and `simulate_battle`
+  (Monte-Carlo troop vs party using the real damage formulas).
+- **Localization** — `export_texts` / `import_texts` move every text of the game (database,
+  system terms, map names, dialogue, choices, battle events) through CSV or JSON, keep
+  control codes intact and split long dialogue into extra message boxes.
+- **Skill files, prompts and resources** — bundled `SKILL.md` workflow guides, reference
+  tables as MCP resources and ready-made prompts (`new_town`, `balance_check`, ...), see
+  [Skills, prompts and resources](#skills-prompts-and-resources).
 - **Search everywhere** — substring search across every database, and across every event on
   every map, including *inside* event command lists (find which event shows a line of
   dialogue or runs a script).
@@ -100,7 +116,7 @@ connecting socket's address, not just the bind address). A self-signed TLS certi
 to the project.
 
 **Status:** the endpoint is fully verified at the protocol level (handshake, session
-management, and all 41 tools tested directly over HTTPS with `curl`). What's *not*
+management, and the 41 tools of the first release tested directly over HTTPS with `curl`). What's *not*
 guaranteed is that a given GUI connector-adding flow will accept a self-signed localhost
 certificate — some do (after a manual "proceed anyway" warning, since they open the URL as
 a normal page), others silently reject it because their background connection check doesn't
@@ -113,7 +129,7 @@ config) — reach for `--http` only if your client specifically requires a URL.
 The server process must stay running for the connector to work — start it in its own
 terminal window before adding the connector, and leave that window open.
 
-## Tool reference (46 tools)
+## Tool reference (57 tools)
 
 | Group | Tools |
 | --- | --- |
@@ -122,7 +138,11 @@ terminal window before adding the connector, and leave that window open.
 | Skill helpers | `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill` |
 | Search | `search_records`, `search_map_events` |
 | Maps & events | `list_maps`, `get_map`, `create_map`, `update_map`, `get_event`, `update_event`, `create_event`, `delete_event`, `add_event_command`, `add_dialogue`, `event_command_reference` |
-| Tilesets & painting | `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map` |
+| Tilesets & painting | `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map`, `render_map_image` |
+| Map connections | `connect_maps`, `list_map_connections` |
+| Bulk & balancing | `bulk_update_records`, `generate_param_curve`, `generate_enemy_scaling`, `balance_report`, `simulate_battle` |
+| Localization | `export_texts`, `import_texts` |
+| Skill files | `install_skills` |
 | Plugins | `list_plugins`, `configure_plugin`, `add_plugin`, `remove_plugin`, `create_plugin`, `read_plugin`, `write_plugin` |
 | Playtest | `playtest_start`, `playtest_status`, `playtest_log`, `playtest_stop` |
 | Safety | `list_backups`, `restore_backup`, `validate_project` |
@@ -130,6 +150,39 @@ terminal window before adding the connector, and leave that window open.
 Every tool description is written for AI consumption: parameter semantics, RPG Maker quirks
 (target scopes, command codes, 1-indexed arrays), and pointers to related tools are all in
 the schema, so assistants can use the server without external documentation.
+
+## Skills, prompts and resources
+
+Besides tools, the server offers three kinds of built-in guidance that MCP clients can use:
+
+**Skill files** (`skills/<name>/SKILL.md`) are short workflow guides for the assistant. They are
+served as resources (`rpgmaker://skills/<name>`) and can be copied into your game project with
+the `install_skills` tool, so Claude Code loads them automatically in that project
+(`.claude/skills/`, or `scope: "user"` for `~/.claude/skills/`):
+
+| Skill | Covers |
+| --- | --- |
+| `rpgmaker-mv-workflow` | Safety rules, data conventions, which tool to use for what |
+| `rpgmaker-map-building` | Plan → paint → look → fix loop, layers, tile choice, connecting maps |
+| `rpgmaker-event-writing` | Dialogue, choices, indentation rules, switches, one-time chests, triggers |
+| `rpgmaker-balancing` | Targets, report/simulation workflow, curves, bulk edits with dry runs |
+| `rpgmaker-localization` | Export/import workflow, control codes, message length |
+| `rpgmaker-plugin-dev` | Plugin header, aliasing engine methods, plugin commands, testing |
+
+**Resources** — `rpgmaker://reference/event-commands`, `trait-codes`, `damage-formulas` and
+`database-fields` are the lookup tables an assistant needs most, available without a tool call.
+
+**Prompts** — ready-made workflows that show up as commands in clients that support MCP prompts:
+`new_town`, `design_dungeon`, `add_quest`, `balance_check`, `review_dialogue`, `translate_game`
+and `project_health`.
+
+## Balancing tools in a nutshell
+
+Bulk edits, curve generators and `import_texts` are **dry runs by default** — they return a diff
+and write nothing until you pass `dryRun: false`. `simulate_battle` and `balance_report` use the
+project's real class curves, equipment, traits and damage formulas (evaluated safely: formulas
+are checked against a whitelist before they run). They do not model states, buffs or items, so
+treat them as a guide and playtest the important fights.
 
 ## Backups
 
@@ -152,6 +205,11 @@ Add `.mcp-backups/` to your game project's `.gitignore` if the game is under ver
 - Tiles are painted with `paint_tiles` (not `update_map`, which refuses to touch `data`).
   Pick tiles via `get_tileset_info` / `get_tileset_image`; a tile's sheet must have an image
   assigned in the map's tileset, otherwise the tile would be invisible and the call is rejected.
+- `render_map_image` reads the tileset and character images from `img/` (encrypted `.rpgmvp`
+  deployments cannot be shown); sheets without a usable image are drawn as flat colours and
+  listed in the answer. Water is drawn in its first animation frame.
+- `export_texts` writes into the project (default `localization/`); the file is backed up
+  before it is overwritten and existing translations are carried over by key.
 - NW.js playtest auto-detects Steam and KADOKAWA install paths, the project's own
   `Game.exe`, and the `RPGMAKER_MV_NWJS` environment variable, in that order.
 - In browser playtest mode, console output stays in the browser devtools — use NW.js mode
@@ -178,7 +236,9 @@ claude mcp add rpgmaker-mv -- node "$(pwd)/dist/index.js" --project "/path/to/Yo
 
 ```sh
 npm run build   # compile TypeScript to dist/
-npm run smoke   # end-to-end test: real stdio client against a generated MV project
+npm run test:unit  # unit tests for the pure modules (PNG, formulas, renderer, battle maths)
+npm run smoke      # end-to-end test: real stdio client against a generated MV project
+npm test           # build + unit tests + smoke test (what CI runs)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and guidelines,
