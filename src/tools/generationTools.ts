@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mulberry32 } from "../battle.js";
@@ -7,6 +9,7 @@ import { generateDungeon } from "../gen/dungeon.js";
 import { layoutToPaintOps, verifyReachable } from "../gen/materialize.js";
 import { passableGrid } from "../passability.js";
 import { Project, ProjectError } from "../project.js";
+import { MAX_STAMP_SIZE, STAMP_DIR, type Stamp, captureStamp, checkStamp, placeStamp, stampFile } from "../stamps.js";
 import { type TileProfile, profileProblems, suggestTileProfile, tileProfileSchema } from "../tileProfile.js";
 import { LAYER_COUNT, TileError, applyPaintOps } from "../tiles.js";
 import { safe, textResult } from "../util.js";
@@ -199,6 +202,112 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
         reachability: { reachable: check.reachable, expected: check.expected },
         notes,
       });
+    })
+  );
+
+  server.registerTool(
+    "capture_stamp",
+    {
+      title: "Capture stamp",
+      description:
+        "Save a rectangle of a map as a reusable stamp in <project>/.mcp-stamps/<name>.json: all six layers (tiles, shadow bits, regions) and, with includeEvents (default true), the events standing inside it. " +
+        "Use place_stamp to paste it onto any map of the same tileset. Width and height are 1-64 and the whole rectangle must lie inside the map. " +
+        "Names are 1-64 characters (letters, digits, space, _ and -, starting with a letter or digit). An existing stamp is only replaced when overwrite is true. " +
+        "Stamps are written like any project file, so inside an open changeset they are only staged until commit_changeset. Add .mcp-stamps/ to .gitignore next to .mcp-backups/ unless you want to share stamps.",
+      inputSchema: {
+        mapId: z.number().int().min(1),
+        x: z.number().int().min(0),
+        y: z.number().int().min(0),
+        width: z.number().int().min(1).max(MAX_STAMP_SIZE),
+        height: z.number().int().min(1).max(MAX_STAMP_SIZE),
+        name: z.string().describe("Stamp name, e.g. \"well\" or \"Tavern 2\""),
+        includeEvents: z.boolean().default(true).describe("Also capture the events inside the rectangle"),
+        overwrite: z.boolean().default(false).describe("Replace a stamp that already has this name"),
+      },
+    },
+    safe(async ({ mapId, x, y, width, height, name, includeEvents, overwrite }) => {
+      const file = stampFile(project.root, name);
+      if (!overwrite && (await project.exists(file))) {
+        throw new ProjectError(`A stamp named "${name}" already exists. Pass overwrite: true to replace it, or pick another name.`);
+      }
+      const map = await project.readJson<MvMap>(project.mapFile(mapId));
+      const stamp = captureStamp(map, name, x, y, width, height, includeEvents);
+      await project.writeJson(file, stamp);
+      return textResult({ name, width, height, tilesetId: stamp.tilesetId, events: stamp.events.length, file: path.relative(project.root, file).split(path.sep).join("/") });
+    })
+  );
+
+  server.registerTool(
+    "place_stamp",
+    {
+      title: "Place stamp",
+      description:
+        "Paste a stamp made with capture_stamp onto a map with its top-left corner at (x, y). The whole stamp must fit inside the map (it is never clipped) and the map must use the same tileset the stamp was captured from. " +
+        "The rectangle is REPLACED on every layer: empty stamp cells erase what was there. Autotile cells (A1-A4) are re-shaped so their edges blend with the surroundings, including the cells next to the stamp; all other tiles, shadow bits and regions are copied as they are. " +
+        "With includeEvents (default true) the stamp's events are added with new ids and moved to the placement; if one would land on a cell that already has an event, nothing is placed and the cells are listed (includeEvents: false places only the tiles). " +
+        "There is no rotate or mirror. A backup of the map is kept.",
+      inputSchema: {
+        mapId: z.number().int().min(1),
+        x: z.number().int().min(0).describe("Left edge of the placement"),
+        y: z.number().int().min(0).describe("Top edge of the placement"),
+        name: z.string().describe("Stamp name"),
+        includeEvents: z.boolean().default(true),
+      },
+    },
+    safe(async ({ mapId, x, y, name, includeEvents }) => {
+      const file = stampFile(project.root, name);
+      if (!(await project.exists(file))) {
+        throw new ProjectError(`No stamp named "${name}". Call list_stamps to see the stamps, or capture_stamp to make one.`);
+      }
+      const stamp = await project.readJson<Stamp>(file);
+      checkStamp(stamp, name);
+      const map = await project.readJson<MvMap>(project.mapFile(mapId));
+      if (map.tilesetId !== stamp.tilesetId) {
+        throw new ProjectError(
+          `Stamp "${name}" was captured from a map using tileset ${stamp.tilesetId}, but map ${mapId} uses tileset ${String(map.tilesetId)}. ` +
+            `Tile ids only match within one tileset; use set_map_tileset first or capture a stamp from a map with tileset ${String(map.tilesetId)}.`
+        );
+      }
+      const result = placeStamp(map, stamp, x, y, includeEvents);
+      await project.writeJson(project.mapFile(mapId), map);
+      return textResult({
+        mapId,
+        placed: { x, y, width: stamp.width, height: stamp.height },
+        cellsChanged: result.cellsChanged,
+        eventIds: result.eventIds,
+      });
+    })
+  );
+
+  server.registerTool(
+    "list_stamps",
+    {
+      title: "List stamps",
+      description:
+        "List the stamps saved in <project>/.mcp-stamps/ (name, size, tilesetId, event count), sorted by name. Stamps captured inside a changeset that is still open are not listed until it is committed.",
+      inputSchema: {},
+    },
+    safe(async () => {
+      const dir = path.join(project.root, STAMP_DIR);
+      let entries: string[] = [];
+      try {
+        entries = await fs.readdir(dir);
+      } catch {
+        // no stamps captured yet
+      }
+      const stamps: { name: string; width: number; height: number; tilesetId: number; events: number }[] = [];
+      const skipped: string[] = [];
+      for (const entry of entries.filter((e) => e.endsWith(".json")).sort()) {
+        const name = entry.slice(0, -".json".length);
+        try {
+          const stamp = await project.readJson<Stamp>(stampFile(project.root, name));
+          checkStamp(stamp, name);
+          stamps.push({ name, width: stamp.width, height: stamp.height, tilesetId: stamp.tilesetId, events: stamp.events.length });
+        } catch {
+          skipped.push(entry);
+        }
+      }
+      return textResult(skipped.length > 0 ? { stamps, skipped } : { stamps });
     })
   );
 }

@@ -410,6 +410,26 @@ await call("get_record", { type: "actors", id: 1 }, (t) => t.includes("Harold") 
   await expectError("commit_changeset with nothing open errors", "commit_changeset", {}, "No changeset is open");
 }
 
+// stamps: capture a 3x3 region of map 1 (autotiles, a B tile, chest events) and place it on map 2
+await call("capture_stamp", { mapId: 1, x: 6, y: 6, width: 3, height: 3, name: "Corner" },
+  (t) => /"events": [1-9]/.test(t));
+await call("list_stamps", {}, (t) => t.includes('"Corner"'));
+await call("place_stamp", { mapId: 2, x: 10, y: 5, name: "Corner" }, (t) => t.includes('"eventIds"'));
+const idRows = (text) => text.split("\n").slice(1).map((l) => l.trim().split(/\s+/).slice(1).join(" "));
+const stampedB = idRows(await ids(2, 2, 10, 5, 3, 3));
+const sourceB = idRows(await ids(1, 2, 6, 6, 3, 3));
+const sameB = stampedB.join("|") === sourceB.join("|") && sourceB.join(" ").includes("5");
+console.log(`${sameB ? "PASS" : "FAIL"} placed stamp has the same B-sheet ids as the source region`);
+if (!sameB) { failures++; console.log(sourceB, stampedB); }
+// autotile shapes are recomputed against the new surroundings, so only the kind carries over (A2 kind 16 = ids 2816-2863)
+const stampedA = idRows(await ids(2, 0, 10, 5, 3, 3)).join(" ").split(" ").map(Number);
+const kindOk = stampedA.length === 9 && stampedA.every((id) => id >= 2816 && id < 2864);
+console.log(`${kindOk ? "PASS" : "FAIL"} placed stamp keeps the autotile kind on layer 0`);
+if (!kindOk) { failures++; console.log(stampedA); }
+await expectError("place_stamp outside the map errors", "place_stamp", { mapId: 2, x: 19, y: 14, name: "Corner" }, "not fully inside");
+await expectError("capture_stamp rejects a reserved name", "capture_stamp",
+  { mapId: 1, x: 0, y: 0, width: 1, height: 1, name: "CON" }, "Invalid stamp name");
+
 // procedural generation: a dungeon on the fixture tileset (profile suggested from its data)
 await call("generate_map", { kind: "dungeon", create: { name: "Generated", width: 30, height: 20, tilesetId: 1 }, seed: 1 },
   (t) => t.includes('"reachable"'));
