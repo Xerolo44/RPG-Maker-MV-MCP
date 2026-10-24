@@ -133,6 +133,8 @@ await call("add_event_command", { mapId: 1, eventId: 2, commands: [
 await call("search_map_events", { query: "guard" }, (t) => t.includes('"eventId": 2'));
 await call("search_map_events", { query: "halt! who", searchCommands: true },
   (t) => t.includes("command 401"));
+await call("simulate_event", { mapId: 1, eventId: 2 },
+  (t) => t.includes("Halt! Who goes there?") && t.includes('"ended": "end"'));
 
 // system name setters
 await call("set_switch_name", { id: 5, name: "Boss Defeated" }, (t) => t.includes("Boss Defeated"));
