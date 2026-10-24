@@ -366,6 +366,40 @@ test("build_dialogue_tree index: top-level positions work, positions inside a bl
   });
 });
 
+test("build_dialogue_tree index: positions inside a multi-line command are refused, nothing is written", async () => {
+  await withProjectServer(async (client, { mapFile }) => {
+    const base = [
+      cmd(101, 0, "", 0, 0, 2),
+      cmd(401, 0, "line one"),
+      cmd(401, 0, "line two"),
+      cmd(302, 0, 0, 1, 0, 0, false),
+      cmd(605, 0, 0, 2, 0, 0),
+      cmd(0, 0),
+    ];
+    const reset = async () => {
+      const map = JSON.parse(await fs.readFile(mapFile, "utf8"));
+      map.events[1].pages[0].list = structuredClone(base);
+      await fs.writeFile(mapFile, JSON.stringify(map), "utf8");
+      return JSON.stringify(map);
+    };
+    // 1, 2 = text continuation lines (401), 4 = shop good (605)
+    for (const index of [1, 2, 4]) {
+      const before = await reset();
+      const { res } = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.equal(res.isError, true, `index ${index}`);
+      assert.match(res.content[0].text, /inside a multi-line command/, `index ${index}`);
+      assert.equal(await fs.readFile(mapFile, "utf8"), before, `index ${index}`);
+    }
+    // between whole commands still works: before the 101, before the 302, at the terminator
+    for (const index of [0, 3, 5]) {
+      await reset();
+      const { res, body } = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.ok(!res.isError, `index ${index}: ${res.content[0].text}`);
+      assert.equal(body.inserted.at, index);
+    }
+  });
+});
+
 test("build_dialogue_tree omits preview for long inserted trees and reports a half-specified target", async () => {
   await withProjectServer(async (client) => {
     const tree = Array.from({ length: 21 }, (_, i) => ({ say: `line ${i}` }));

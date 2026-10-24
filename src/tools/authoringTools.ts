@@ -5,7 +5,7 @@ import { compileDialogue, dialogueNodeSchema } from "../dialogueTree.js";
 import { buildTemplate, templateFieldShape, templateParamsSchema } from "../eventTemplates.js";
 import { ProjectError, type Project } from "../project.js";
 import { safe, textResult } from "../util.js";
-import { insertEventCommands, insertionIndent } from "./mapTools.js";
+import { insertEventCommands, insertionIndent, multiLineContinuationAt } from "./mapTools.js";
 
 const PREVIEW_LIMIT = 40;
 
@@ -57,6 +57,15 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
           throw new ProjectError(
             `Index ${index} is inside a block (nesting level ${indent}) of event ${eventId}; build_dialogue_tree only inserts at the top level. ` +
               "Pick an index between top-level commands (or omit it to append), or put the nodes in the tree's own choices/if branches."
+          );
+        }
+      }
+      if (write && index !== undefined) {
+        const continuation = await multiLineContinuationAt(project, mapId, eventId, pageIndex, index);
+        if (continuation !== undefined) {
+          throw new ProjectError(
+            `Index ${index} is inside a multi-line command of event ${eventId} (it points at a continuation line, code ${continuation}). ` +
+              "Pick an index at the start of a command (use get_event to see the list), or omit it to append."
           );
         }
       }

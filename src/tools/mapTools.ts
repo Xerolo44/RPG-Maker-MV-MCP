@@ -103,6 +103,31 @@ export async function insertionIndent(
   return (at.indent ?? 0) + (BLOCK_CONTINUATION_CODES.has(at.code) ? 1 : 0);
 }
 
+/**
+ * Command codes that only continue the command before them: 401 text line, 405 scrolling text line,
+ * 408 comment line, 605 shop good, 655 script line. Inserting before one splits a multi-line command.
+ */
+const MULTILINE_CONTINUATION_CODES = new Set([401, 405, 408, 605, 655]);
+
+/**
+ * The continuation code of the command a new insertion at `index` would push down, or undefined when the
+ * position sits between whole commands (same position rule as insertEventCommands).
+ */
+export async function multiLineContinuationAt(
+  project: Project,
+  mapId: number,
+  eventId: number,
+  pageIndex: number,
+  index: number | undefined
+): Promise<number | undefined> {
+  const map = await project.readJson<MvMap>(project.mapFile(mapId));
+  const list = (map.events?.[eventId]?.pages[pageIndex] as { list?: { code: number }[] } | undefined)?.list;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  const defaultPos = list[list.length - 1]?.code === 0 ? list.length - 1 : list.length;
+  const at = list[Math.min(index ?? defaultPos, defaultPos)];
+  return at && MULTILINE_CONTINUATION_CODES.has(at.code) ? at.code : undefined;
+}
+
 export async function insertEventCommands(
   project: Project,
   mapId: number,
