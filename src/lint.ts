@@ -72,11 +72,35 @@ function describeIds(ids: number[]): string {
   return ids.length > 5 ? `${shown} and ${ids.length - 5} more` : shown;
 }
 
-export function lintCommandList(list: Cmd[], loc: Omit<Finding["location"], "index">, ctx: LintContext): Finding[] {
+/** Why a list entry is not a usable command, or null when it is well formed. */
+function malformedReason(entry: unknown): string | null {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return "entry is not an object";
+  const c = entry as Record<string, unknown>;
+  if (typeof c.code !== "number") return "entry has no numeric code";
+  if (typeof c.indent !== "number") return `command ${c.code} has no numeric indent`;
+  if (!Array.isArray(c.parameters)) return `command ${c.code} has missing or non-array parameters`;
+  return null;
+}
+
+/** Stand-in for a malformed entry: keeps list positions and takes the previous indent so it adds no structure problems. */
+const PLACEHOLDER_CODE = -1;
+
+export function lintCommandList(rawList: Cmd[], loc: Omit<Finding["location"], "index">, ctx: LintContext): Finding[] {
   const findings: Finding[] = [];
   const add = (rule: LintRule, severity: Severity, index: number, message: string): void => {
     findings.push({ rule, severity, location: { ...loc, index }, message });
   };
+
+  // Malformed entries are reported and replaced by inert placeholders so indexes stay at original positions.
+  let list = rawList;
+  rawList.forEach((entry, i) => {
+    const reason = malformedReason(entry);
+    if (reason === null) return;
+    if (list === rawList) list = rawList.slice();
+    const prevIndent = i > 0 ? list[i - 1].indent : 0;
+    list[i] = { code: PLACEHOLDER_CODE, indent: prevIndent, parameters: [] };
+    add("block-structure", "error", i, `index ${i}: malformed command (${reason})`);
+  });
 
   for (const problem of validateCommandList(list)) {
     const index = Number(/^index (\d+)/.exec(problem)![1]);
@@ -90,7 +114,7 @@ export function lintCommandList(list: Cmd[], loc: Omit<Finding["location"], "ind
     switch (c.code) {
       case 115: {
         const next = list[i + 1];
-        if (next && next.code !== 0 && next.indent === c.indent) {
+        if (next && next.code !== 0 && next.code !== PLACEHOLDER_CODE && next.indent === c.indent) {
           add("unreachable-command", "warning", i + 1, `command ${next.code} can never run: it follows Exit Event Processing (115) at index ${i}`);
         }
         break;

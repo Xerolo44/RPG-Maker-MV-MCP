@@ -327,3 +327,61 @@ test("lint_events tool returns findings, counts, skippedMaps and truncated", asy
     }
   });
 });
+
+// ---- malformed commands ----
+
+test("malformed commands: null, missing parameters and non-array parameters are reported, other commands still lint", () => {
+  const list = [
+    c(117, 0, 7), // 0: missing common event
+    null, // 1
+    { code: 401, indent: 0 }, // 2: parameters missing
+    { code: 121, indent: 0, parameters: "1" }, // 3: parameters not an array
+    c(201, 0, 0, 99, 1, 1, 2, 0), // 4: missing map
+    END,
+  ];
+  let findings;
+  assert.doesNotThrow(() => {
+    findings = lint(list);
+  });
+  const malformed = findings.filter((f) => f.rule === "block-structure");
+  assert.deepEqual(malformed.map((f) => f.location.index), [1, 2, 3]);
+  for (const f of malformed) assert.equal(f.severity, "error");
+  assert.match(malformed[0].message, /not an object/);
+  assert.match(malformed[1].message, /parameters/);
+  assert.match(malformed[2].message, /parameters/);
+  assert.deepEqual(
+    findings.filter((f) => f.rule !== "block-structure").map((f) => [f.rule, f.location.index]),
+    [["missing-common-event", 0], ["transfer-missing-map", 4]],
+  );
+});
+
+test("malformed commands: a malformed last entry does not throw and the list counts as unterminated", () => {
+  const findings = lint([c(401, 0, "hi"), null]);
+  assert.ok(findings.some((f) => f.rule === "unterminated-list" && f.location.index === 1));
+  assert.ok(findings.some((f) => f.rule === "block-structure" && f.location.index === 1));
+});
+
+test("lintProject: a malformed command does not abort the lint of other events", async () => {
+  const data = baseData({
+    "Map001.json": {
+      width: 10,
+      height: 10,
+      events: [
+        null,
+        { id: 1, pages: [{ list: [null, c(117, 0, 99), END] }] },
+        { id: 2, pages: [{ list: [{ code: 117, indent: 0 }, END] }] },
+        { id: 3, pages: [{ list: [c(117, 0, 98), END] }] },
+      ],
+    },
+  });
+  await withProject(data, async ({ project }) => {
+    const r = await lintProject(project, { scope: "maps", maxLineChars: 50, minSeverity: "warning" });
+    const summary = r.findings.map((f) => [f.rule, f.location.eventId, f.location.index]);
+    assert.deepEqual(summary, [
+      ["block-structure", 1, 0],
+      ["missing-common-event", 1, 1],
+      ["block-structure", 2, 0],
+      ["missing-common-event", 3, 0],
+    ]);
+  });
+});
