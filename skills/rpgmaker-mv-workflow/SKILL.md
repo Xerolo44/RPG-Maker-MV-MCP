@@ -9,6 +9,8 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 1. Call `get_project_info` (or `set_project` with the project folder if none is selected). It shows the title, start map, counts and plugin list.
 2. The RPG Maker editor keeps the whole database in memory and overwrites the JSON files when it saves. Ask the user to **close the editor** (or at least not save from it) while you edit, and to reopen the project afterwards.
 3. Every file is snapshotted into `.mcp-backups/<session>/` before its first change. Mention `list_backups` / `restore_backup` when the user worries about a change.
+4. `editor_status` reports whether the editor process seems to be running (Windows only) and which files this server wrote were since changed by something else. Call it before a long session and after the user has had the editor open.
+5. If the client was started with `--tools` (or `RPGMV_TOOLS`), only some tool groups exist; if a tool named here is missing, tell the user which group to enable (`maps`, `tiles`, `render`, `authoring`, `generation`, `analysis`, ...).
 
 ## Data conventions you must respect
 - Database arrays are **1-indexed**: index 0 is `null`, and a record's `id` equals its array position. Never write ids yourself - `create_record` assigns them.
@@ -25,15 +27,19 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 | Find where something is used | `search_records`, `search_map_events` (with `searchCommands`) |
 | Build a map | `create_map`, `get_tileset_info`, `paint_tiles`, `render_map_image` |
 | Link two maps | `connect_maps`, then `list_map_connections` |
-| Events and dialogue | `create_event`, `add_dialogue`, `add_event_command` |
+| Events and dialogue | `create_event_from_template`, `build_dialogue_tree`, `create_event`, `add_dialogue`, `add_event_command` |
+| Generate a dungeon or cave | `generate_map`, then `render_map_image`; reuse pieces with `capture_stamp` / `place_stamp` |
+| Several edits that belong together | `begin_changeset` ... `commit_changeset` |
+| Check events and assets | `lint_events`, `audit_assets`, `simulate_event` |
 | Translate the game | `export_texts`, `import_texts` |
-| Check the result | `validate_project`, `playtest_start` |
+| Check the result | `validate_project`, `lint_events`, `audit_assets`, `render_diff`, `playtest_start` |
 
 ## Habits that prevent damage
 - **Preview first.** Anything that touches many records (`bulk_update_records`, `import_texts`, the curve tools) defaults to a dry run - show the user the diff, then apply with `dryRun: false`.
 - **Look at what you build.** After painting or placing events call `render_map_image` and actually inspect the picture.
 - **Validate before you finish.** Run `validate_project` and fix broken references (missing maps, items, skills, common events).
 - **Name things.** Use `set_switch_name` / `set_variable_name` for every switch and variable you introduce so the project stays readable in the editor.
+- **Group multi-step edits in a changeset.** `begin_changeset {label}` stages every following edit in memory (reads show the staged state, nothing is on disk); `commit_changeset` writes it all in one step, `discard_changeset` throws it away, `undo_changeset` rolls back the last commit (and overwrites later edits to those files). One changeset at a time; `restore_backup` is refused while one is open.
 - Tile data is edited only through `paint_tiles`; `update_map` refuses `data` and `events`.
 - Do not delete or rewrite data the user did not ask about. When in doubt, search first (`search_records`) to see what depends on it.
 
@@ -41,5 +47,5 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 1. Design it in plain words (what the player sees and does).
 2. Create the data (skills, items, enemies, troops).
 3. Build or edit maps, then events that reference the data.
-4. Name switches/variables, run `validate_project`.
+4. Name switches/variables, then run `validate_project`, `lint_events` and `audit_assets` (missing images/audio, wrong letter case) before calling it done.
 5. `playtest_start` (NW.js mode captures the console via `playtest_log`) and report what you verified and what you could not.

@@ -34,6 +34,15 @@ Erasing needs an explicit layer: `{tile: 0, layer: 2, ...}`.
 - Vary the ground: a second A2 kind in patches looks much better than one flat fill.
 - Keep doors and exits 1 tile wide and mark them clearly.
 
+## Generating dungeons and caves
+`generate_map` makes a seeded dungeon (rooms and corridors) or cave and paints it, so you do not paint a maze by hand:
+1. `generate_map {kind, create: {name, width, height, tilesetId}}` (or `mapId` for an existing empty map; a map with tiles or events needs `overwrite: true`). Pass `markers: {entrance, exit, chests}` and a `seed` if you want the result repeatable. The seed, the tile profile used (`profileUsed`, suggested from the tileset unless you pass `profile`) and the marker positions come back.
+2. `render_map_image {mapId, showPassability: true}` and look. Wall faces are one row tall and decor is sparse, so check it by eye; try another `seed` or pass your own `profile` if it looks wrong.
+3. Markers are empty priority-0 events (`Entrance`, `Exit`, `Chest 1..n`). Wire the doors with `connect_maps` on those tiles with `allowOverlap: true` (or `delete_event` the marker first), and turn each chest marker into a real chest with `create_event_from_template` (`allowStack: true` on the marker's tile, or delete the marker first).
+4. Sizes: dungeons need at least 14x7 (or 7x14); caves need roughly 9x9 or more and very small ones can be refused.
+
+`capture_stamp {mapId, x, y, width, height, name}` saves a hand-built piece (a house, a well) under `.mcp-stamps/`; `place_stamp {mapId, x, y, name}` pastes it on a map with the same tileset (it replaces the rectangle, never clips, no rotate/mirror); `list_stamps` shows them.
+
 ## Reviewing your changes
 After bulk painting or generation, run `render_diff {mapId}`: it compares the map with the backup taken before this session's first edit (or `against: {session}` / `{changeset}`) and returns a PNG of the current map with changed cells outlined yellow and added or moved events outlined green, plus a text list of the first 30 changed cells and event ids. Check that only the area you meant to touch is outlined.
 
