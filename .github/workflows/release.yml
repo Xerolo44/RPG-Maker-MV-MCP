@@ -1,0 +1,103 @@
+name: Release
+
+# Runs on every push to main but only releases when package.json carries a version that has no
+# GitHub Release yet. Bump package.json, server.json and CHANGELOG.md in the PR, merge, done.
+#
+# Each step is safe to re-run: npm and the MCP Registry are skipped if the version is already
+# there, and the GitHub Release is created last, so it doubles as the "fully released" marker.
+# A failed run therefore resumes where it stopped on re-run (Actions -> Re-run failed jobs).
+#
+# One-time setup: npm trusted publishing for this repo and the workflow file "release.yml"
+# (npmjs.com -> package -> Settings -> Trusted publisher). No tokens or secrets are needed.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # create the tag and GitHub Release
+  id-token: write # npm trusted publishing + provenance, MCP Registry GitHub OIDC login
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  MCP_PUBLISHER_VERSION: v1.8.4
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.pkg.outputs.version }}" >/dev/null 2>&1; then
+            echo "v${{ steps.pkg.outputs.version }} is already released, nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check versions and extract release notes
+        if: steps.gate.outputs.release == 'true'
+        run: node scripts/release-check.mjs "$RUNNER_TEMP/release-notes.md"
+
+      # Trusted publishing needs npm >= 11.5.1, which ships with Node 24.
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.release == 'true'
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Build and test
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          npm ci
+          npm test
+
+      - name: Publish to npm
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if npm view "$name@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+            echo "$name@${{ steps.pkg.outputs.version }} is already on npm, skipping."
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Publish to MCP Registry
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          name=$(node -p "require('./server.json').name")
+          version="${{ steps.pkg.outputs.version }}"
+          listed=$(curl -fsS -G "https://registry.modelcontextprotocol.io/v0/servers" \
+            --data-urlencode "search=$name" --data-urlencode "limit=100" \
+            | jq --arg n "$name" --arg v "$version" '[.servers[].server | select(.name == $n and .version == $v)] | length')
+          if [ "$listed" != "0" ]; then
+            echo "$name $version is already in the MCP Registry, skipping."
+            exit 0
+          fi
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" mcp-publisher
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish
+
+      - name: Create GitHub Release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.pkg.outputs.version }}" \
+            --target "$GITHUB_SHA" \
+            --title "v${{ steps.pkg.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
