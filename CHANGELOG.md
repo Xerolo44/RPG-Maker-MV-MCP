@@ -35,8 +35,8 @@ All notable changes to this project are documented here. The format follows
 - **Tool profiles**: `--tools a,b` (or the environment variable `RPGMV_TOOLS`) registers only the
   chosen tool groups to keep the tool list short. Groups: `project`, `database`, `maps`, `tiles`,
   `render`, `plugins`, `playtest`, `search`, `maintenance`, `connect`, `balance`, `localization`,
-  `authoring`, `generation`, `analysis`; `project` is always on and the default is `all`. Resources
-  and prompts are always on.
+  `authoring`, `generation`, `analysis`; `project` is always on and the default is `all`.
+  `install_skills`, resources and prompts are always on.
 - `showPassability` option on `render_map_image`: tints cells that are blocked in at least one
   direction translucent red.
 - `npm run test:unit`: a `node:test` harness for the tests in `test/`; `npm test` runs build, unit
