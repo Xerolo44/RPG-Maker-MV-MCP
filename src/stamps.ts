@@ -116,14 +116,19 @@ export function checkStamp(stamp: Stamp, name: string): void {
   const bad = (why: string): never => {
     throw new ProjectError(`Stamp "${name}" is damaged: ${why}.`);
   };
+  if (typeof stamp !== "object" || stamp === null) bad("it is not a stamp object");
   const cells = stamp.width * stamp.height;
   if (!Number.isInteger(stamp.width) || !Number.isInteger(stamp.height) || stamp.width < 1 || stamp.height < 1) {
     bad("its width/height are invalid");
   }
   if (!Array.isArray(stamp.layers) || stamp.layers.length !== LAYER_COUNT) bad(`it needs ${LAYER_COUNT} layers`);
-  for (const layer of stamp.layers) {
+  for (const [z, layer] of stamp.layers.entries()) {
     if (!Array.isArray(layer) || layer.length !== cells) bad(`every layer needs ${cells} entries`);
-    if (layer.some((v) => !Number.isInteger(v) || v < 0 || v >= TILE.MAX)) bad("it holds a tile id outside 0-8191");
+    // Layers 0-3 hold tile ids, 4 shadow bits (0-15) and 5 region ids (0-255).
+    const max = z === 4 ? 16 : z === 5 ? 256 : TILE.MAX;
+    if (layer.some((v) => !Number.isInteger(v) || v < 0 || v >= max)) {
+      bad(z === 4 ? "layer 4 (shadows) holds a value outside 0-15" : z === 5 ? "layer 5 (regions) holds a value outside 0-255" : "it holds a tile id outside 0-8191");
+    }
   }
   if (!Array.isArray(stamp.events)) bad("its events are not a list");
   for (const e of stamp.events) {
@@ -204,7 +209,7 @@ export function placeStamp(map: StampMap, stamp: Stamp, x: number, y: number, in
   try {
     applyPaintOps(map, ops);
   } catch (err) {
-    map.data.splice(0, map.data.length, ...before);
+    for (let i = 0; i < before.length; i++) map.data[i] = before[i];
     throw new ProjectError(err instanceof Error ? err.message : String(err));
   }
 

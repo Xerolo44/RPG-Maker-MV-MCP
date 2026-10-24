@@ -329,3 +329,25 @@ test("stamps captured in an open changeset stay off disk until commit", async ()
     assert.equal((await call("list_stamps", {})).json.stamps.length, 1);
   });
 });
+
+async function damagedStampTest(content) {
+  await withServer([blank(6, 6)], async ({ call, dir, readMap, file }) => {
+    assert.equal((await call("capture_stamp", { mapId: 1, x: 0, y: 0, width: 2, height: 2, name: "Bad" })).isError, false);
+    const stampPath = path.join(dir, ".mcp-stamps", "Bad.json");
+    const stamp = JSON.parse(await fs.readFile(stampPath, "utf8"));
+    await fs.writeFile(stampPath, typeof content === "function" ? JSON.stringify(content(stamp)) : content);
+    const before = await fs.readFile(file("Map001.json"));
+    const r = await call("place_stamp", { mapId: 1, x: 0, y: 0, name: "Bad" });
+    assert.equal(r.isError, true);
+    assert.match(r.text, /damaged/);
+    assert.ok(before.equals(await fs.readFile(file("Map001.json"))));
+  });
+}
+
+test("a stamp file holding a literal null is reported as damaged", () => damagedStampTest("null"));
+
+test("a stamp with an out-of-range shadow value (layer 4) is reported as damaged", () =>
+  damagedStampTest((s) => ((s.layers[4][0] = 16), s)));
+
+test("a stamp with an out-of-range region value (layer 5) is reported as damaged", () =>
+  damagedStampTest((s) => ((s.layers[5][0] = 256), s)));
