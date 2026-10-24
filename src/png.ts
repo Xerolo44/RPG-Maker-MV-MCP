@@ -187,3 +187,43 @@ export function decodePng(buf: Buffer): Bitmap {
   }
   return { width, height, data: out };
 }
+
+/**
+ * Reads width and height from the PNG header only (signature + the first chunk, which must be
+ * a 13-byte IHDR), so callers can inspect a file from its first 29 bytes without decoding it.
+ */
+export function pngInfo(buf: Buffer): { width: number; height: number } {
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("Not a PNG file.");
+  if (buf.length < 29) throw new PngError("PNG header is truncated.");
+  if (buf.readUInt32BE(8) !== 13 || buf.toString("ascii", 12, 16) !== "IHDR") {
+    throw new PngError("PNG does not start with an image header.");
+  }
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  if (!width || !height || width > 0x7fffffff || height > 0x7fffffff) {
+    throw new PngError("PNG header has invalid dimensions.");
+  }
+  return { width, height };
+}
+
+/**
+ * Nearest-neighbour downscale so the longer edge equals `maxEdge` (aspect kept, at least 1 px
+ * per side). Returns `b` itself when it already fits.
+ */
+export function scaleDownNearest(b: Bitmap, maxEdge: number): Bitmap {
+  if (!Number.isInteger(maxEdge) || maxEdge < 1) throw new PngError("maxEdge must be a positive integer.");
+  const longest = Math.max(b.width, b.height);
+  if (longest <= maxEdge) return b;
+  const width = Math.max(1, Math.round((b.width * maxEdge) / longest));
+  const height = Math.max(1, Math.round((b.height * maxEdge) / longest));
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const sy = Math.min(b.height - 1, Math.floor(((y + 0.5) * b.height) / height));
+    for (let x = 0; x < width; x++) {
+      const sx = Math.min(b.width - 1, Math.floor(((x + 0.5) * b.width) / width));
+      const s = (sy * b.width + sx) * 4;
+      data.set(b.data.subarray(s, s + 4), (y * width + x) * 4);
+    }
+  }
+  return { width, height, data };
+}
