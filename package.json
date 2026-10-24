@@ -19,8 +19,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "smoke": "node scripts/smoke.mjs",
-    "test": "npm run build && node --test scripts/unit.mjs && node scripts/smoke.mjs",
-    "test:unit": "node --test scripts/unit.mjs"
+    "test": "npm run build && npm run test:unit && node scripts/smoke.mjs",
+    "test:unit": "node scripts/run-unit.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -46,7 +46,8 @@ src/
 skills/                      bundled SKILL.md workflow guides (shipped in the npm package)
 scripts/
 ├── smoke.mjs                end-to-end smoke test
-└── unit.mjs                 unit tests (node:test) for the pure modules
+└── run-unit.mjs             runs every test/*.test.mjs with node --test
+test/                        unit tests (node:test) for the pure modules: *.test.mjs
 ```
 
 ## Guidelines
@@ -59,7 +60,7 @@ scripts/
 - **Tools should fail with helpful messages.** Wrap handlers in `safe()` and throw
   `ProjectError` with a message that tells the client what to do instead.
 - **Add smoke coverage** in `scripts/smoke.mjs` for every new tool, and unit tests in
-  `scripts/unit.mjs` for logic that can be tested without a project.
+  `test/*.test.mjs` for logic that can be tested without a project.
 - **Preview before bulk writes.** Tools that change many records default to `dryRun: true`.
 - **Skill files** are part of the product: when you change a tool's behaviour, update the
   matching `skills/*/SKILL.md`.
