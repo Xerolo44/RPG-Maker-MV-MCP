@@ -25,7 +25,8 @@ All notable changes to this project are documented here. The format follows
   - Authoring: `build_dialogue_tree` compiles a nested say / choices / if / set-switch /
     set-variable / transfer tree into correctly indented event commands, and
     `create_event_from_template` builds a finished chest, locked door, inn, shop, save point or NPC
-    event in one write.
+    event in one write. A choices node with `cancel: "branch"` is written as cancel type -2 (a
+    "when cancel" branch, command 403).
   - Visuals: `render_diff` compares a map with an earlier backup session or changeset and returns
     a PNG of the current map with changed cells and added or moved events outlined.
   - Generation: `generate_map` (seeded dungeons and caves, painted with a tile profile suggested
@@ -81,6 +82,19 @@ All notable changes to this project are documented here. The format follows
   commit. The changeset journal is not pruned, and one server process per project is assumed.
 - The static playtest server follows symlinks inside the project folder and serves
   dot-directories.
+- `get_tileset_info` labels a kind "passable" unless all four direction bits are set, whereas
+  `generate_map`, the tile-profile suggestion and `showPassability` treat any set direction bit as
+  blocking. A floor listed as passable can therefore be refused by `generate_map`.
+- The static playtest server has no Host-header check: while a browser playtest is running, DNS
+  rebinding could let a web page read the project files.
+- `build_dialogue_tree`'s `cancel: "branch"` creates an empty "when cancel" branch whose body
+  cannot be authored from the tree.
+- `simulate_event` lists the shop and save screens (so the inn, shop and save-point templates) as
+  unsupported. It caps the number of entries, not their size, does not clamp gold above
+  99,999,999, does not support labels (118/119), and ends silently on an unmatched 111 or 102.
+- Stamp names are case-insensitive on Windows only ("Well" and "well" are one file on Windows and
+  two on Linux). `list_stamps` does not list stamps staged in an open changeset.
+- The decor density of generated maps is conservative (about 1-2% of floor cells).
 - MZ projects are accepted but untested.
 - The event-command layouts used by templates and dialogue trees come from knowledge of the MV
   engine, not from engine source. Playtest important events.
