@@ -235,6 +235,9 @@ const validation = await call("validate_project", {},
   (t) => t.includes('"ok": true') && t.includes("transfers the player to map 99"));
 if (!validation.includes('"errors": []')) { console.log("FAIL validation should have no errors"); failures++; }
 
+// asset audit: Actor1 face/character are referenced but absent; Test_A2 tileset exists
+await call("audit_assets", {}, (t) => t.includes("Actor1"));
+
 // map preview as PNG
 {
   const r = await client.callTool({ name: "render_map_image", arguments: { mapId: 1, tileSize: 16, showGrid: true } });
