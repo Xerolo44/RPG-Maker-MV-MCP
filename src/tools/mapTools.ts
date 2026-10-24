@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
+import { TileError, TileSpec, applyPaintOps } from "../tiles.js";
+import { checkSheetsAvailable, loadTileset, tileSpecSchema } from "./tileTools.js";
 
 interface MapInfo {
   id: number;
@@ -250,7 +252,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
     {
       title: "Update map properties",
       description:
-        "Shallow-merge fields into a map's JSON (e.g. displayName, note, bgm, encounterList). Refuses to touch 'data' or 'events' — use dedicated event tools; tile editing is not supported.",
+        "Shallow-merge fields into a map's JSON (e.g. displayName, note, bgm, encounterList). Refuses to touch 'data' or 'events' — use the event tools for events and paint_tiles for tiles. To switch tilesets prefer set_map_tileset.",
       inputSchema: {
         mapId: z.number().int().min(1),
         data: z.record(z.unknown()).describe("Map property fields to set"),
@@ -259,7 +261,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
     safe(async ({ mapId, data }) => {
       if ("data" in data || "events" in data) {
         throw new ProjectError(
-          "update_map cannot modify 'data' (tiles) or 'events'. Use the event tools instead."
+          "update_map cannot modify 'data' (tiles) or 'events'. Use paint_tiles for tiles and the event tools for events."
         );
       }
       const file = project.mapFile(mapId);
@@ -456,16 +458,29 @@ export function registerMapTools(server: McpServer, project: Project): void {
     {
       title: "Create map",
       description:
-        "Create a new blank map: writes MapXXX.json with empty tile data and registers it in MapInfos.json. Tiles must still be painted in the editor, but events, properties, and everything else can be edited here. Returns the new map id.",
+        "Create a new map: writes MapXXX.json and registers it in MapInfos.json. The map starts empty unless `fill` is given (a ground tile for layer 0); afterwards use paint_tiles to paint it, get_tileset_info to choose tiles and add events with the event tools. Returns the new map id.",
       inputSchema: {
         name: z.string(),
         width: z.number().int().min(1).max(256).default(17),
         height: z.number().int().min(1).max(256).default(13),
         tilesetId: z.number().int().min(1).default(1),
         parentId: z.number().int().min(0).default(0).describe("Parent map id in the editor tree (0 = top level)"),
+        fill: tileSpecSchema.optional().describe("Optional tile to fill layer 0 with, e.g. {sheet:'A2', kind:16} for grass"),
       },
     },
-    safe(async ({ name, width, height, tilesetId, parentId }) => {
+    safe(async ({ name, width, height, tilesetId, parentId, fill }) => {
+      const newMap = blankMap(name, width, height, tilesetId);
+      if (fill !== undefined) {
+        try {
+          const painted = applyPaintOps(newMap, [
+            { type: "rect", tile: fill as TileSpec, layer: 0, x: 0, y: 0, width, height },
+          ]);
+          checkSheetsAvailable(await loadTileset(project, tilesetId).catch(() => null), painted.sheetsUsed);
+        } catch (err) {
+          if (err instanceof TileError) throw new ProjectError(err.message);
+          throw err;
+        }
+      }
       const infosFile = project.dataFile("MapInfos.json");
       const infos = await project.readJson<({ id: number; order: number } | null)[]>(infosFile);
       const id = infos.length;
@@ -479,9 +494,9 @@ export function registerMapTools(server: McpServer, project: Project): void {
         scrollX: (width * 48) / 2,
         scrollY: (height * 48) / 2,
       } as never);
-      await project.writeJson(project.mapFile(id), blankMap(name, width, height, tilesetId));
+      await project.writeJson(project.mapFile(id), newMap);
       await project.writeJson(infosFile, infos);
-      return textResult({ created: { mapId: id, name, width, height, tilesetId } });
+      return textResult({ created: { mapId: id, name, width, height, tilesetId, filled: fill !== undefined } });
     })
   );
 

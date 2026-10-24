@@ -9,6 +9,7 @@ import { Project } from "./project.js";
 import { registerProjectTools } from "./tools/projectTools.js";
 import { registerDatabaseTools } from "./tools/databaseTools.js";
 import { registerMapTools } from "./tools/mapTools.js";
+import { registerTileTools } from "./tools/tileTools.js";
 import { registerPluginTools } from "./tools/pluginTools.js";
 import { registerPlaytestTools } from "./tools/playtestTools.js";
 import { registerSkillTools } from "./tools/skillTools.js";
@@ -18,7 +19,7 @@ import { registerMaintenanceTools } from "./tools/maintenanceTools.js";
 async function main(): Promise<void> {
   const server = new McpServer({
     name: "rpgmaker-mv-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
   const project = new Project();
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   registerProjectTools(server, project);
   registerDatabaseTools(server, project);
   registerMapTools(server, project);
+  registerTileTools(server, project);
   registerPluginTools(server, project);
   registerPlaytestTools(server, project);
   registerSkillTools(server, project);

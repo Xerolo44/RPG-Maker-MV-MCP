@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](package.json)
 [![MCP](https://img.shields.io/badge/protocol-Model%20Context%20Protocol-blueviolet)](https://modelcontextprotocol.io)
+[![Rpgmaker MV MCP on mcprush](https://mcprush.com/badge/xerolo44-rpgmaker-mv-mcp/score.svg)](https://mcprush.com/to/xerolo44-rpgmaker-mv-mcp?ref=badge)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that turns AI assistants
 (Claude Code, Claude Desktop, or any MCP client) into a co-developer for **RPG Maker MV**
@@ -27,6 +28,10 @@ Ask your assistant things like:
 - **Maps and events** — create maps, create/edit/delete events, insert event commands in
   batches, add dialogue with automatic message-box splitting, and consult a built-in
   event command code reference.
+- **Tilesets and map painting** — inspect a tileset (sheets, autotile kinds, passability), look
+  at its sheet images, switch a map's tileset, and paint ground, water, walls and objects with
+  rectangles, flood fill and single cells. Autotile edges and corners are computed exactly like
+  the editor does, so painted maps look right in game. `render_map` shows the result as text.
 - **Search everywhere** — substring search across every database, and across every event on
   every map, including *inside* event command lists (find which event shows a line of
   dialogue or runs a script).
@@ -108,7 +113,7 @@ config) — reach for `--http` only if your client specifically requires a URL.
 The server process must stay running for the connector to work — start it in its own
 terminal window before adding the connector, and leave that window open.
 
-## Tool reference (41 tools)
+## Tool reference (46 tools)
 
 | Group | Tools |
 | --- | --- |
@@ -117,6 +122,7 @@ terminal window before adding the connector, and leave that window open.
 | Skill helpers | `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill` |
 | Search | `search_records`, `search_map_events` |
 | Maps & events | `list_maps`, `get_map`, `create_map`, `update_map`, `get_event`, `update_event`, `create_event`, `delete_event`, `add_event_command`, `add_dialogue`, `event_command_reference` |
+| Tilesets & painting | `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map` |
 | Plugins | `list_plugins`, `configure_plugin`, `add_plugin`, `remove_plugin`, `create_plugin`, `read_plugin`, `write_plugin` |
 | Playtest | `playtest_start`, `playtest_status`, `playtest_log`, `playtest_stop` |
 | Safety | `list_backups`, `restore_backup`, `validate_project` |
@@ -143,8 +149,9 @@ Add `.mcp-backups/` to your game project's `.gitignore` if the game is under ver
   automatically, and ids always match array positions.
 - MZ projects (`.rmmzproject`) are accepted too — the data format is nearly identical —
   but only MV is regularly tested.
-- Tile data editing is intentionally unsupported (`create_map` makes blank maps;
-  `update_map` refuses to touch `data`). Paint tiles in the editor.
+- Tiles are painted with `paint_tiles` (not `update_map`, which refuses to touch `data`).
+  Pick tiles via `get_tileset_info` / `get_tileset_image`; a tile's sheet must have an image
+  assigned in the map's tileset, otherwise the tile would be invisible and the call is rejected.
 - NW.js playtest auto-detects Steam and KADOKAWA install paths, the project's own
   `Game.exe`, and the `RPGMAKER_MV_NWJS` environment variable, in that order.
 - In browser playtest mode, console output stays in the browser devtools — use NW.js mode

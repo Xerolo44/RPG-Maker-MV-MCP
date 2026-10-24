@@ -4,9 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-24
 
 ### Added
+- **Tilesets and map painting** (5 new tools), so maps can finally be built, not just created blank:
+  - `get_tileset_info` — sheets (A1–A5, B–E) and their images, tile id ranges, every autotile
+    kind with type, position on the sheet and passability, and a passability grid for A5/B–E.
+  - `get_tileset_image` — returns a tileset sheet as an image so the assistant can see the tiles.
+  - `set_map_tileset` — switch a map to another tileset (validated against `Tilesets.json`).
+  - `paint_tiles` — batch operations (`cells`, `rect`, `fill`) on any of the six map layers,
+    with tiles chosen as `{sheet, kind}` / `{sheet, index}` or a raw tile id. Autotile shapes
+    (47-shape floors, 16-shape walls, waterfalls) are computed from the neighbours and
+    neighbours are re-shaped, matching the editor and the engine's own tables.
+  - `render_map` — text view of a map region (symbols with legend, or raw tile ids).
+- `create_map` takes an optional `fill` tile for layer 0, so new maps are not empty.
 - `--http [port]` mode: exposes the server as a Streamable HTTP + HTTPS endpoint
   (`https://127.0.0.1:<port>/mcp`) for URL-based/custom-connector MCP clients, alongside the
   existing stdio mode. Bound to localhost only, with a per-connection remote-address check.

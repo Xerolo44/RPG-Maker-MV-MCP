@@ -23,9 +23,22 @@ const actor = (id, name) => ({
 await fs.writeFile(path.join(dataDir, "Actors.json"),
   JSON.stringify([null, actor(1, "Harold"), actor(2, "Therese")]));
 for (const f of ["Classes", "Skills", "Items", "Weapons", "Armors", "Enemies",
-  "Troops", "States", "Animations", "Tilesets", "CommonEvents"]) {
+  "Troops", "States", "Animations", "CommonEvents"]) {
   await fs.writeFile(path.join(dataDir, `${f}.json`), "[null]");
 }
+// One tileset: A2, A5 and B sheets assigned (A1/A3/A4/C/D/E left empty on purpose).
+const tilesetFlags = new Array(8192).fill(0);
+tilesetFlags[5] = 0xf; // B tile 5 is impassable
+tilesetFlags[2048 + 17 * 48] = 0xf; // A2 kind 17 is impassable
+await fs.writeFile(path.join(dataDir, "Tilesets.json"), JSON.stringify([null, {
+  id: 1, mode: 1, name: "Test World", note: "", flags: tilesetFlags,
+  tilesetNames: ["", "Test_A2", "", "", "Test_A5", "Test_B", "", "", ""],
+}]));
+await fs.mkdir(path.join(tmp, "img", "tilesets"), { recursive: true });
+const tinyPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64");
+await fs.writeFile(path.join(tmp, "img", "tilesets", "Test_A2.png"), tinyPng);
 await fs.writeFile(path.join(dataDir, "System.json"), JSON.stringify({
   gameTitle: "Smoke Test Quest", currencyUnit: "G", startMapId: 1, startX: 5, startY: 5,
   switches: ["", "Opened Chest"], variables: ["", "Quest Progress"],
@@ -137,6 +150,82 @@ await call("create_map", { name: "Cave", width: 20, height: 15 },
   (t) => t.includes('"mapId": 2'));
 await call("list_maps", {}, (t) => t.includes("Cave"));
 await call("create_event", { mapId: 2, name: "Miner", x: 1, y: 1 }, (t) => t.includes("Miner"));
+
+// tilesets and tile painting
+async function expectError(label, name, args, includes) {
+  const r = await client.callTool({ name, arguments: args });
+  const text = r.content?.[0]?.text ?? "";
+  const ok = !!r.isError && (!includes || text.includes(includes));
+  console.log(`${ok ? "PASS" : "FAIL"} ${label}`);
+  if (!ok) { failures++; console.log(`     ${text.slice(0, 300)}`); }
+}
+const ids = (mapId, layer, x, y, width, height) =>
+  call("render_map", { mapId, mode: "ids", layer, x, y, width, height }, null);
+
+await call("get_tileset_info", { tilesetId: 1 },
+  (t) => t.includes("Test World") && t.includes("Test_A2") && t.includes('"sheet": "A3"'));
+await call("get_tileset_info", { tilesetId: 1, sheet: "A2", tileIds: [5] },
+  (t) => t.includes("kind 17: ground | rule floor") && t.includes("| blocked") &&
+    t.includes('"passable": false'));
+await call("get_tileset_info", { tilesetId: 1, sheet: "B" },
+  (t) => t.includes("passabilityGrid") && t.includes("index = "));
+const img = await client.callTool({ name: "get_tileset_image", arguments: { tilesetId: 1, sheet: "A2" } });
+const gotImage = img.content?.some((c) => c.type === "image" && c.mimeType === "image/png" && c.data.length > 0);
+console.log(`${gotImage ? "PASS" : "FAIL"} get_tileset_image returns a PNG image`);
+if (!gotImage) failures++;
+await expectError("get_tileset_image on an unassigned sheet errors", "get_tileset_image",
+  { tilesetId: 1, sheet: "A1" }, "no image assigned");
+
+// a 3x3 block of A2 kind 17 gets the nine distinct edge shapes (base 2864)
+await call("paint_tiles", { mapId: 1, operations: [
+  { type: "rect", tile: { sheet: "A2", kind: 17 }, x: 2, y: 2, width: 3, height: 3 },
+] }, (t) => t.includes('"cellsChanged": 9'));
+const block = await ids(1, 0, 2, 2, 3, 3);
+const blockOk = ["2898", "2884", "2900", "2880", "2864", "2888", "2904", "2892", "2902"]
+  .every((id) => block.includes(id));
+console.log(`${blockOk ? "PASS" : "FAIL"} 3x3 autotile block has corner/edge/centre shapes`);
+if (!blockOk) { failures++; console.log(block); }
+
+// flood fill around the block re-shapes the neighbours that now touch a different kind
+await call("paint_tiles", { mapId: 1, operations: [
+  { type: "fill", tile: { sheet: "A2", kind: 16 }, x: 0, y: 0 },
+] }, (t) => t.includes('"cellsPainted": 91'));
+const left = await ids(1, 0, 1, 2, 1, 1);
+if (!left.includes("2840")) { console.log("FAIL neighbour re-shaped to right-edge shape\n" + left); failures++; }
+else console.log("PASS neighbour re-shaped to right-edge shape");
+
+// upper-layer object tile defaults to layer 2; erasing works and needs a layer
+await call("paint_tiles", { mapId: 1, operations: [
+  { type: "cells", tile: { sheet: "B", index: 5 }, cells: [{ x: 7, y: 7 }] },
+  { type: "cells", tile: 0, layer: 0, cells: [{ x: 3, y: 3 }] },
+] }, (t) => t.includes('"layer": 2'));
+const obj = await ids(1, 2, 7, 7, 1, 1);
+if (!obj.trim().endsWith("5")) { console.log("FAIL B tile on layer 2\n" + obj); failures++; }
+else console.log("PASS B tile on layer 2");
+const hole = await ids(1, 0, 3, 3, 1, 1);
+if (!hole.trim().endsWith("0")) { console.log("FAIL erase\n" + hole); failures++; } else console.log("PASS erase");
+await call("render_map", { mapId: 1 }, (t) => t.includes("A2 kind 17") && t.includes("B #5"));
+await call("paint_tiles", { mapId: 1, operations: [
+  { type: "cells", tile: 3, layer: 5, cells: [{ x: 0, y: 0 }] },
+] }, (t) => t.includes('"layer": 5'));
+
+await expectError("painting from an unassigned sheet errors", "paint_tiles", { mapId: 1, operations: [
+  { type: "rect", tile: { sheet: "A3", kind: 48 }, x: 0, y: 0, width: 2, height: 2 } ] }, "no image assigned");
+await expectError("painting outside the map errors", "paint_tiles", { mapId: 1, operations: [
+  { type: "rect", tile: { sheet: "A2", kind: 16 }, x: 8, y: 8, width: 5, height: 5 } ] }, "does not fit");
+await expectError("wrong kind for sheet errors", "paint_tiles", { mapId: 1, operations: [
+  { type: "cells", tile: { sheet: "A2", kind: 3 }, cells: [{ x: 0, y: 0 }] } ] }, "valid kinds");
+await expectError("erase without layer errors", "paint_tiles", { mapId: 1, operations: [
+  { type: "cells", tile: 0, cells: [{ x: 0, y: 0 }] } ] }, "explicit layer");
+
+await call("set_map_tileset", { mapId: 1, tilesetId: 1 }, (t) => t.includes("Test World"));
+await expectError("set_map_tileset with unknown tileset errors", "set_map_tileset",
+  { mapId: 1, tilesetId: 9 }, "does not exist");
+await call("create_map", { name: "Meadow", width: 6, height: 5, fill: { sheet: "A2", kind: 16 } },
+  (t) => t.includes('"mapId": 3') && t.includes('"filled": true'));
+const meadow = await ids(3, 0, 0, 0, 6, 5);
+if (meadow.split("2816").length - 1 !== 30) { console.log("FAIL create_map fill\n" + meadow); failures++; }
+else console.log("PASS create_map fill covers the whole layer");
 
 // validation: healthy except known quirks we introduce
 await call("add_event_command", { mapId: 2, eventId: 1, commands: [
