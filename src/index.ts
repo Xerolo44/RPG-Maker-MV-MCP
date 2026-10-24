@@ -20,6 +20,7 @@ import { registerConnectTools } from "./tools/connectTools.js";
 import { registerBalanceTools } from "./tools/balanceTools.js";
 import { registerLocalizationTools } from "./tools/localizationTools.js";
 import { registerKnowledge } from "./knowledge.js";
+import { parseProfile, type Group } from "./profiles.js";
 
 async function main(): Promise<void> {
   const server = new McpServer({
@@ -29,8 +30,20 @@ async function main(): Promise<void> {
 
   const project = new Project();
 
-  // Optional: --project <path> preselects the project folder.
   const args = process.argv.slice(2);
+
+  // --tools <csv> (or env RPGMV_TOOLS) restricts which tool groups are registered.
+  let enabled: Set<Group>;
+  try {
+    const toolsFlag = args.indexOf("--tools");
+    const toolsValue = toolsFlag !== -1 ? args[toolsFlag + 1] : process.env.RPGMV_TOOLS;
+    enabled = parseProfile(toolsValue);
+  } catch (err) {
+    console.error(`[rpgmaker-mv-mcp] ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  // Optional: --project <path> preselects the project folder.
   const projectFlag = args.indexOf("--project");
   if (projectFlag !== -1 && args[projectFlag + 1]) {
     try {
@@ -41,19 +54,19 @@ async function main(): Promise<void> {
     }
   }
 
-  registerProjectTools(server, project);
-  registerDatabaseTools(server, project);
-  registerMapTools(server, project);
-  registerTileTools(server, project);
-  registerRenderTools(server, project);
-  registerPluginTools(server, project);
-  registerPlaytestTools(server, project);
-  registerSkillTools(server, project);
-  registerSearchTools(server, project);
-  registerMaintenanceTools(server, project);
-  registerConnectTools(server, project);
-  registerBalanceTools(server, project);
-  registerLocalizationTools(server, project);
+  if (enabled.has("project")) registerProjectTools(server, project);
+  if (enabled.has("database")) registerDatabaseTools(server, project);
+  if (enabled.has("maps")) registerMapTools(server, project);
+  if (enabled.has("tiles")) registerTileTools(server, project);
+  if (enabled.has("render")) registerRenderTools(server, project);
+  if (enabled.has("plugins")) registerPluginTools(server, project);
+  if (enabled.has("playtest")) registerPlaytestTools(server, project);
+  if (enabled.has("database")) registerSkillTools(server, project);
+  if (enabled.has("search")) registerSearchTools(server, project);
+  if (enabled.has("maintenance")) registerMaintenanceTools(server, project);
+  if (enabled.has("connect")) registerConnectTools(server, project);
+  if (enabled.has("balance")) registerBalanceTools(server, project);
+  if (enabled.has("localization")) registerLocalizationTools(server, project);
   registerKnowledge(server, project);
 
   const httpFlag = args.indexOf("--http");
