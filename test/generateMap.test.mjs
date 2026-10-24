@@ -308,3 +308,144 @@ test("inside an open changeset nothing reaches disk until commit", async () => {
     assert.equal(infos[2].name, "Crypt");
   });
 });
+
+// ---- final-review fixes ----
+
+const dist = (name) => import(`../dist/${name}`);
+
+/** Walkable cells of a saved map after blocking `blocked`: are all of them reachable from `from`? */
+async function reachableAfterBlocking(map, from, blocked) {
+  const { passableGrid } = await dist("passability.js");
+  const walk = passableGrid(map, flags);
+  const { width, height } = map;
+  for (const c of blocked) walk[c.y * width + c.x] = 0;
+  const seen = new Uint8Array(width * height);
+  const queue = [from.y * width + from.x];
+  seen[queue[0]] = 1;
+  for (let h = 0; h < queue.length; h++) {
+    const cur = queue[h];
+    const x = cur % width;
+    const nbrs = [x > 0 ? cur - 1 : -1, x < width - 1 ? cur + 1 : -1, cur - width, cur + width];
+    for (const n of nbrs) {
+      if (n >= 0 && n < width * height && walk[n] && !seen[n]) {
+        seen[n] = 1;
+        queue.push(n);
+      }
+    }
+  }
+  let total = 0;
+  let reached = 0;
+  for (let i = 0; i < width * height; i++) if (walk[i]) { total++; if (seen[i]) reached++; }
+  return { total, reached, startWalkable: walk[from.y * width + from.x] === 1 };
+}
+
+test("chest markers never cut the walkable floor, and every marker has priorityType 0", async () => {
+  await withServer(async ({ call, file }) => {
+    const cases = [
+      ["dungeon", 17, 13],
+      ["dungeon", 40, 30],
+      ["cave", 30, 30],
+    ];
+    let chestsSeen = 0;
+    for (const [kind, width, height] of cases) {
+      for (let seed = 1; seed <= 8; seed++) {
+        const r = await call("generate_map", {
+          kind, create: { name: `${kind}${seed}`, width, height, tilesetId: 1 }, profile: PROFILE, seed, markers: { chests: 20 },
+        });
+        assert.equal(r.isError, false, r.text);
+        const map = JSON.parse(await fs.readFile(file(`Map${String(r.json.mapId).padStart(3, "0")}.json`), "utf8"));
+        for (const e of map.events.filter(Boolean)) assert.equal(e.pages[0].priorityType, 0, e.name);
+        const blocked = r.json.chests;
+        chestsSeen += blocked.length;
+        const res = await reachableAfterBlocking(map, r.json.entrance, blocked);
+        assert.ok(res.startWalkable);
+        assert.equal(res.reached, res.total, `${kind} ${width}x${height} seed ${seed}: chests cut off ${res.total - res.reached} cells`);
+      }
+    }
+    assert.ok(chestsSeen > 100, `chests were created (${chestsSeen})`);
+  });
+});
+
+test("marker ids are returned and match the saved events", async () => {
+  await withServer(async ({ call, file }) => {
+    const r = await call("generate_map", gen({ markers: { chests: 2 } }));
+    assert.equal(r.isError, false, r.text);
+    const map = JSON.parse(await fs.readFile(file("Map002.json"), "utf8"));
+    const m = r.json.markers;
+    for (const [marker, name] of [[m.entrance, "Entrance"], [m.exit, "Exit"], [m.chests[0], "Chest 1"], [m.chests[1], "Chest 2"]]) {
+      const e = map.events[marker.eventId];
+      assert.equal(e.name, name);
+      assert.deepEqual({ x: e.x, y: e.y }, { x: marker.x, y: marker.y });
+    }
+    assert.deepEqual({ x: m.exit.x, y: m.exit.y }, r.json.exit);
+    assert.deepEqual(m.chests.map(({ x, y }) => ({ x, y })), r.json.chests);
+  });
+});
+
+test("connect_maps at the returned exit works with allowOverlap, and after delete_event without it", async () => {
+  await withServer(async ({ call, file }) => {
+    const g = await call("generate_map", gen());
+    assert.equal(g.isError, false, g.text);
+    const blocked = await call("connect_maps", {
+      a: { mapId: 2, door: g.json.exit }, b: { mapId: 1, door: { x: 5, y: 5 } },
+    });
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.text, /Exit/);
+    const ok = await call("connect_maps", {
+      a: { mapId: 2, door: g.json.exit }, b: { mapId: 1, door: { x: 5, y: 5 } }, allowOverlap: true,
+    });
+    assert.equal(ok.isError, false, ok.text);
+    let map = JSON.parse(await fs.readFile(file("Map002.json"), "utf8"));
+    assert.ok(map.events.some((e) => e && e.name.startsWith("To ") && e.x === g.json.exit.x && e.y === g.json.exit.y));
+
+    const del = await call("delete_event", { mapId: 2, eventId: g.json.markers.entrance.eventId });
+    assert.equal(del.isError, false, del.text);
+    const viaDelete = await call("connect_maps", {
+      a: { mapId: 2, door: g.json.entrance }, b: { mapId: 1, door: { x: 6, y: 6 } },
+    });
+    assert.equal(viaDelete.isError, false, viaDelete.text);
+    map = JSON.parse(await fs.readFile(file("Map002.json"), "utf8"));
+    assert.ok(map.events.some((e) => e && e.name.startsWith("To ") && e.x === g.json.entrance.x && e.y === g.json.entrance.y));
+  });
+});
+
+test("create_event_from_template at a returned chest cell works with allowStack", async () => {
+  await withServer(async ({ call, file }) => {
+    const g = await call("generate_map", gen({ markers: { chests: 1 } }));
+    assert.equal(g.isError, false, g.text);
+    const at = g.json.chests[0];
+    const refused = await call("create_event_from_template", { mapId: 2, ...at, template: "chest", reward: { gold: 5 } });
+    assert.equal(refused.isError, true);
+    const ok = await call("create_event_from_template", { mapId: 2, ...at, template: "chest", reward: { gold: 5 }, allowStack: true });
+    assert.equal(ok.isError, false, ok.text);
+    const map = JSON.parse(await fs.readFile(file("Map002.json"), "utf8"));
+    assert.equal(map.events[ok.json.eventId].x, at.x);
+  });
+});
+
+test("an existing map with events: [] gets Entrance as a non-zero event id", async () => {
+  await withServer(async ({ call, file }) => {
+    const m = JSON.parse(MAP1);
+    m.width = 30;
+    m.height = 20;
+    m.data = new Array(30 * 20 * 6).fill(0);
+    m.events = [];
+    await fs.writeFile(file("Map001.json"), JSON.stringify(m));
+    const r = await call("generate_map", { kind: "dungeon", mapId: 1, profile: PROFILE, seed: 3 });
+    assert.equal(r.isError, false, r.text);
+    const map = JSON.parse(await fs.readFile(file("Map001.json"), "utf8"));
+    assert.equal(map.events[0], null);
+    assert.equal(map.events[1].name, "Entrance");
+    assert.equal(r.json.markers.entrance.eventId, 1);
+  });
+});
+
+test("overwrite together with create is rejected and writes nothing", async () => {
+  await withServer(async ({ call, file }) => {
+    const r = await call("generate_map", gen({ overwrite: true }));
+    assert.equal(r.isError, true);
+    assert.match(r.text, /overwrite/);
+    assert.equal(await fs.readFile(file("MapInfos.json"), "utf8"), INFOS);
+    await assert.rejects(fs.access(file("Map002.json")));
+  });
+});

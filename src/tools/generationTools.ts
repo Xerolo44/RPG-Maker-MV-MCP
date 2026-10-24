@@ -28,24 +28,62 @@ function asProjectError<T>(fn: () => T): T {
   }
 }
 
-/** Cells for chest markers: walkable layout floor, not within one cell (Chebyshev) of the entrance or exit. */
+/**
+ * Cells for chest markers: walkable layout floor, not within one cell (Chebyshev) of the entrance or exit,
+ * and picked only while the walkable cells that are not chests all stay reachable from the entrance, so a
+ * chest standing in a one-wide corridor can never cut the player off. Fewer than `count` cells come back
+ * when not enough fit.
+ */
 function pickChestCells(layout: Layout, walkable: Uint8Array, seed: number, count: number): Point[] {
   const { width, height, floor } = layout;
+  const cellCount = width * height;
   const near = (x: number, y: number): boolean =>
     [layout.entrance, layout.exit].some((p) => Math.abs(p.x - x) <= 1 && Math.abs(p.y - y) <= 1);
-  const eligible: Point[] = [];
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (floor[y * width + x] && walkable[y * width + x] && !near(x, y)) eligible.push({ x, y });
-    }
+  const eligible: number[] = [];
+  let walkableCount = 0;
+  for (let i = 0; i < cellCount; i++) {
+    if (!walkable[i]) continue;
+    walkableCount++;
+    if (floor[i] && !near(i % width, Math.floor(i / width))) eligible.push(i);
   }
+
+  const blocked = new Uint8Array(cellCount);
+  const queue = new Int32Array(cellCount);
+  const start = layout.entrance.y * width + layout.entrance.x;
+  /** True when every walkable, unblocked cell is reachable from the entrance (4-neighbour). */
+  const stillConnected = (blockedCount: number): boolean => {
+    const seen = new Uint8Array(cellCount);
+    let head = 0;
+    let tail = 0;
+    seen[start] = 1;
+    queue[tail++] = start;
+    const visit = (i: number): void => {
+      if (walkable[i] && !blocked[i] && !seen[i]) {
+        seen[i] = 1;
+        queue[tail++] = i;
+      }
+    };
+    while (head < tail) {
+      const cur = queue[head++];
+      const x = cur % width;
+      if (x > 0) visit(cur - 1);
+      if (x < width - 1) visit(cur + 1);
+      if (cur >= width) visit(cur - width);
+      if (cur + width < cellCount) visit(cur + width);
+    }
+    return tail === walkableCount - blockedCount;
+  };
+
   const rng = mulberry32(seed ^ 0x9e3779b9);
   const picked: Point[] = [];
   while (picked.length < count && eligible.length > 0) {
-    const i = Math.floor(rng() * eligible.length);
-    picked.push(eligible[i]);
-    eligible[i] = eligible[eligible.length - 1];
+    const k = Math.floor(rng() * eligible.length);
+    const cell = eligible[k];
+    eligible[k] = eligible[eligible.length - 1];
     eligible.pop();
+    blocked[cell] = 1;
+    if (stillConnected(picked.length + 1)) picked.push({ x: cell % width, y: Math.floor(cell / width) });
+    else blocked[cell] = 0;
   }
   return picked;
 }
@@ -64,10 +102,13 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
         "the lowest-numbered walkable A2 kind as floor (else the first walkable A5 tile), the lowest-numbered blocking A4 wall kind as wall with the floor-rule A4 kind above it as wall top " +
         "(else the first blocking A5 or B tile), and no decor. The profile used and the reasoning are returned as profileUsed and profileNotes. " +
         "Nothing is written when the profile's floor is not walkable, its wall or wall top does not block movement, a sheet has no image, or the painted map is not fully reachable from the entrance. " +
-        "Markers are empty events named Entrance, Exit and Chest 1..n placed on floor cells (chests are random floor cells away from the entrance and exit); " +
-        "`markers` defaults to {entrance: true, exit: true, chests: 0}. " +
+        "Markers are empty placeholder events at priority 0 (below characters, so they never block the player) named Entrance, Exit and Chest 1..n, placed on floor cells; " +
+        "chests are random floor cells away from the entrance and exit, chosen so that no chest cuts off any part of the map. `markers` defaults to {entrance: true, exit: true, chests: 0}. " +
+        "The result lists each marker's eventId and position under `markers`. " +
         "Afterwards: call render_map_image to look at the result (consider showPassability); wire doors to other maps with connect_maps using the returned entrance and exit coordinates; " +
-        "fill the chest markers with create_event_from_template or the event tools. " +
+        "fill the chest markers with create_event_from_template or the event tools. A marker occupies its tile: delete it with delete_event before placing a door or chest there, " +
+        "or pass allowOverlap (connect_maps) / allowStack (create_event_from_template) to place on top of it. " +
+        "A dungeon needs a map of at least 14x7 (or 7x14) cells; smaller maps are refused with a clear error (caves work from 5x5, though very small caves may fail the minimum floor share). " +
         "Limits: decor is best-effort (sparse, only on open floor), and wall faces are a one-row simplification, since many tilesets draw wall sides two or more tiles tall.",
       inputSchema: {
         kind: z.enum(["dungeon", "cave"]),
@@ -98,6 +139,9 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
       if ((mapId === undefined) === (create === undefined)) {
         throw new ProjectError("Give exactly one of `mapId` (an existing map) or `create` (a new map).");
       }
+      if (create && overwrite) {
+        throw new ProjectError("`overwrite` only applies to an existing map (`mapId`); a map made with `create` is always new.");
+      }
       const wantEntrance = markers?.entrance ?? true;
       const wantExit = markers?.exit ?? true;
       const wantChests = markers?.chests ?? 0;
@@ -119,7 +163,7 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
         if (overwrite) {
           map.data = new Array(map.width * map.height * LAYER_COUNT).fill(0);
           map.events = [null];
-        } else if (!Array.isArray(map.events)) {
+        } else if (!Array.isArray(map.events) || map.events.length === 0) {
           map.events = [null];
         }
       }
@@ -164,24 +208,22 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
       const notes: string[] = [];
       const chests = pickChestCells(layout, passableGrid(map, flags), seed, wantChests);
       if (chests.length < wantChests) {
-        notes.push(`Requested ${wantChests} chests but only ${chests.length} walkable cells were free of the entrance and exit, so ${chests.length} were created.`);
+        notes.push(`Requested ${wantChests} chests but only ${chests.length} cells could hold one without standing next to the entrance or exit or cutting off part of the map, so ${chests.length} were created.`);
       }
 
-      const markerEvents: { name: string; at: Point }[] = [];
-      if (wantEntrance) markerEvents.push({ name: "Entrance", at: layout.entrance });
-      if (wantExit) markerEvents.push({ name: "Exit", at: layout.exit });
-      chests.forEach((at, i) => markerEvents.push({ name: `Chest ${i + 1}`, at }));
-      for (const { name, at } of markerEvents) {
-        const event: MvEvent = {
-          id: map.events.length,
-          name,
-          x: at.x,
-          y: at.y,
-          note: "",
-          pages: [structuredClone(DEFAULT_EVENT_PAGE)],
-        };
+      // Placeholder events sit below the characters (priority 0), so they never block the player.
+      const addMarker = (name: string, at: Point): { eventId: number; x: number; y: number } => {
+        const page = structuredClone(DEFAULT_EVENT_PAGE);
+        page.priorityType = 0;
+        const event: MvEvent = { id: map.events.length, name, x: at.x, y: at.y, note: "", pages: [page] };
         map.events.push(event);
-      }
+        return { eventId: event.id, x: at.x, y: at.y };
+      };
+      const markerIds = {
+        ...(wantEntrance ? { entrance: addMarker("Entrance", layout.entrance) } : {}),
+        ...(wantExit ? { exit: addMarker("Exit", layout.exit) } : {}),
+        chests: chests.map((at, i) => addMarker(`Chest ${i + 1}`, at)),
+      };
 
       let resultMapId: number;
       if (create) {
@@ -197,6 +239,7 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
         entrance: layout.entrance,
         exit: layout.exit,
         chests,
+        markers: markerIds,
         profileUsed: profile,
         profileNotes,
         reachability: { reachable: check.reachable, expected: check.expected },
