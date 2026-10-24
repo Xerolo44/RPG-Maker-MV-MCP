@@ -276,6 +276,21 @@ test("a map too small for a room errors clearly and writes nothing", async () =>
   });
 });
 
+test("a cave that comes out too small tells the caller to try another seed or a larger map", async () => {
+  await withServer(async ({ call, file }) => {
+    const before = await fs.readFile(file("MapInfos.json"), "utf8");
+    const r = await call("generate_map", {
+      kind: "cave", create: { name: "Thin cave", width: 20, height: 6, tilesetId: 1 }, profile: PROFILE, seed: 1,
+    });
+    assert.equal(r.isError, true, r.text);
+    assert.doesNotMatch(r.text, /fillPercent|minFloorRatio/);
+    assert.match(r.text, /another seed/);
+    assert.match(r.text, /larger map/);
+    assert.equal(await fs.readFile(file("MapInfos.json"), "utf8"), before);
+    await assert.rejects(fs.access(file("Map002.json")));
+  });
+});
+
 test("an unknown tileset is an error and writes nothing", async () => {
   await withServer(async ({ call, file }) => {
     const r = await call("generate_map", gen({ create: { name: "X", width: 20, height: 20, tilesetId: 9 } }));

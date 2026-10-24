@@ -242,8 +242,9 @@ events is refused unless you pass `overwrite: true`.
   `Entrance`, `Exit` and `Chest 1..n` at priority 0, so they never block the player. They are
   placeholders: wire the doors with `connect_maps` (pass `allowOverlap`, or `delete_event` the
   marker first) and fill the chests with `create_event_from_template`.
-- **Sizes.** Dungeons need at least 14x7 (or 7x14); caves need roughly 9x9 or more, and very
-  small caves may be refused.
+- **Sizes.** Dungeons need at least 14x7 (or 7x14); caves are reliable from about 13x13 (MV's
+  default 17x13 never failed in testing), while 9x9 to 12x12 and thin maps fail for many seeds; try
+  another seed or a larger map.
 - **Look at it.** Use `render_map_image` (try `showPassability`) and `render_diff`. Wall faces are
   a one-row simplification and decor is sparse; see [CHANGELOG.md](CHANGELOG.md) for what has and
   has not been checked.

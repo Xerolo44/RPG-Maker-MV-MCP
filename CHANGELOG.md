@@ -71,8 +71,9 @@ All notable changes to this project are documented here. The format follows
   included: it needs verification against a real RPG Maker MV engine first.
 - Map generation was checked with passability and reachability checks and with unit and end-to-end
   tests, but its visual quality on real RTP tilesets (the one-row wall faces, decor) was not checked
-  by eye. Caves need roughly 9x9 or more (very small ones may fail the minimum floor share) and
-  dungeons at least 14x7 (or 7x14).
+  by eye. Caves are reliable from about 13x13 (MV's default 17x13 never failed in testing); 9x9 to
+  12x12 and thin maps fail for many seeds, so try another seed or a larger map. Dungeons need at
+  least 14x7 (or 7x14).
 - `editor_status` detects the editor process on Windows only, and the process name `RPGMV.exe` is
   unverified. Elsewhere it reports `editorRunning: null`; the check for externally changed files
   works on every platform.
