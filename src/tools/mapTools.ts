@@ -79,6 +79,30 @@ async function readMap(project: Project, mapId: number): Promise<MvMap> {
   return project.readJson<MvMap>(project.mapFile(mapId));
 }
 
+/** Codes that continue or close a block: commands placed just before one of them belong to the preceding body. */
+const BLOCK_CONTINUATION_CODES = new Set([402, 403, 404, 411, 412, 413]);
+
+/**
+ * Indent a command inserted at `index` would need to sit at the same nesting level as its neighbours
+ * (same position rule as insertEventCommands). 0 when the event or page does not exist, so the insert
+ * itself reports that error.
+ */
+export async function insertionIndent(
+  project: Project,
+  mapId: number,
+  eventId: number,
+  pageIndex: number,
+  index: number | undefined
+): Promise<number> {
+  const map = await project.readJson<MvMap>(project.mapFile(mapId));
+  const list = (map.events?.[eventId]?.pages[pageIndex] as { list?: { code: number; indent: number }[] } | undefined)?.list;
+  if (!Array.isArray(list) || list.length === 0) return 0;
+  const defaultPos = list[list.length - 1]?.code === 0 ? list.length - 1 : list.length;
+  const at = list[Math.min(index ?? defaultPos, defaultPos)];
+  if (!at) return 0;
+  return (at.indent ?? 0) + (BLOCK_CONTINUATION_CODES.has(at.code) ? 1 : 0);
+}
+
 export async function insertEventCommands(
   project: Project,
   mapId: number,

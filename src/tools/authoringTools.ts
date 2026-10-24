@@ -5,7 +5,7 @@ import { compileDialogue, dialogueNodeSchema } from "../dialogueTree.js";
 import { buildTemplate, templateFieldShape, templateParamsSchema } from "../eventTemplates.js";
 import { ProjectError, type Project } from "../project.js";
 import { safe, textResult } from "../util.js";
-import { insertEventCommands } from "./mapTools.js";
+import { insertEventCommands, insertionIndent } from "./mapTools.js";
 
 const PREVIEW_LIMIT = 40;
 
@@ -39,7 +39,7 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
           .int()
           .min(0)
           .optional()
-          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator)"),
+          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator). Positions inside a conditional or choice body are refused"),
         dryRun: z.boolean().default(false).describe("Compile and validate only; never touches the project files"),
       },
     },
@@ -48,9 +48,20 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
       if ((mapId === undefined) !== (eventId === undefined)) {
         throw new ProjectError("Give both mapId and eventId to insert into an event, or neither for a dry run.");
       }
+      const write = !dryRun && mapId !== undefined && eventId !== undefined;
+      if (write && index !== undefined) {
+        // The tree is compiled at indent 0, so refuse a position inside a conditional/choice body instead of
+        // silently pulling the new commands out of (or into) that branch.
+        const indent = await insertionIndent(project, mapId, eventId, pageIndex, index);
+        if (indent !== 0) {
+          throw new ProjectError(
+            `Index ${index} is inside a block (nesting level ${indent}) of event ${eventId}; build_dialogue_tree only inserts at the top level. ` +
+              "Pick an index between top-level commands (or omit it to append), or put the nodes in the tree's own choices/if branches."
+          );
+        }
+      }
       const commands = compileDialogue(tree);
       const problems = validateCommandList(terminated(commands));
-      const write = !dryRun && mapId !== undefined && eventId !== undefined;
       const showPreview = !write || commands.length <= PREVIEW_LIMIT;
 
       if (problems.length > 0) {
