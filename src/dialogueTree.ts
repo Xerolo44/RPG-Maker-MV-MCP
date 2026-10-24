@@ -4,9 +4,7 @@
 // indents and block terminators.
 import { z } from "zod";
 import { cmd, type Cmd } from "./commandList.js";
-// eventTemplates imports messageCommands from this module: the cycle is safe because both sides only use
-// each other's exports inside functions, never while their module bodies run.
-import { shopCommands } from "./eventTemplates.js";
+import { shopCommands } from "./shopCommands.js";
 
 export const MAX_DIALOGUE_DEPTH = 8;
 export const MAX_CHOICES = 6;

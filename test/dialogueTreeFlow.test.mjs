@@ -428,12 +428,28 @@ test("the build_dialogue_tree description lists every node, the move-route vocab
   await withProjectServer(async (client) => {
     const { tools } = await client.listTools();
     const description = tools.find((t) => t.name === "build_dialogue_tree").description;
-    const nodeKeys = [
-      "say", "choices", "if", "setSwitch", "setVariable", "setSelfSwitch", "transfer", "raw",
-      "wait", "fade", "tint", "flash", "shake", "weather", "playAudio", "fadeAudio", "showPicture", "erasePicture", "animation", "balloon", "moveRoute",
-      "battle", "shop", "callCommon", "label", "jump", "exit", "comment", "gold", "item", "party", "learnSkill", "recoverAll", "nameInput", "plugin", "scene",
-    ];
-    for (const key of nodeKeys) assert.ok(description.includes(`{${key}:`), `description does not mention {${key}: ...}`);
+    // Each node must appear in its own section: route steps also contain "{jump:" and "{wait:", so a
+    // whole-description substring match would pass even if the flow/presentation node were missing.
+    const at = (marker) => {
+      const i = description.indexOf(marker);
+      assert.ok(i >= 0, `description has no section header ${marker}`);
+      return i;
+    };
+    const [m1, m2, m3] = [at("(1) MESSAGES AND FLOW"), at("(2) CUTSCENE"), at("(3) GAME FLOW")];
+    assert.ok(m1 < m2 && m2 < m3);
+    const sections = {
+      messages: ["say", "choices", "if", "setSwitch", "setVariable", "setSelfSwitch", "transfer", "raw"],
+      cutscene: ["wait", "fade", "tint", "flash", "shake", "weather", "playAudio", "fadeAudio", "showPicture", "erasePicture", "animation", "balloon", "moveRoute"],
+      flow: ["battle", "shop", "callCommon", "label", "jump", "exit", "comment", "gold", "item", "party", "learnSkill", "recoverAll", "nameInput", "plugin", "scene"],
+    };
+    const bodies = { messages: description.slice(m1, m2), cutscene: description.slice(m2, m3), flow: description.slice(m3) };
+    for (const [group, keys] of Object.entries(sections)) {
+      for (const key of keys) assert.ok(bodies[group].includes(`{${key}:`), `${group} section does not mention {${key}: ...}`);
+    }
+    // The forms only the node entries use, not the route steps {jump: {x, y}} / {wait: 1-999}.
+    assert.ok(bodies.cutscene.includes("{wait: 1-6000}"), "cutscene {wait: 1-6000}");
+    assert.ok(bodies.flow.includes("{jump: label name}"), "flow {jump: label name}");
+    assert.ok(bodies.flow.includes("{label: name}"), "flow {label: name}");
     for (const step of ["down", "turnUp", "walkAnimOn", "stepAnimOff", "dirFixOn", "throughOff", "transparentOn", "switchOn", "switchOff", "speed", "frequency"]) {
       assert.ok(description.includes(step), `route step ${step}`);
     }
