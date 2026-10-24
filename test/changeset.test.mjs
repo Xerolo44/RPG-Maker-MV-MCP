@@ -5,6 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { Project, ProjectError } from "../dist/project.js";
 import { summarizeChange } from "../dist/changeset.js";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const MAP_ORIGINAL = '{"width":2,"height":1,"data":[0,0],"events":[null]}';
 const ACTORS_ORIGINAL = '[\n null ,\n{"id":1,"name":"Harold"}\n]';
@@ -320,6 +323,12 @@ test("setRoot rolls back a commit interrupted between renames", async () => {
     assert.equal(await exists(plugin), false);
     assert.deepEqual(await changesetDirs(dir), [], "journal entry dropped");
     assert.deepEqual(fresh.recoveredChangesets, [id]);
+    assert.deepEqual(fresh.recoveryErrors, []);
+    assert.equal(fresh.recoveryReport.length, 1);
+    assert.match(fresh.recoveryReport[0], /Rolled back interrupted changeset .*restored 2 file\(s\)/);
+    // the versions found on disk were saved to the session backup before being overwritten
+    const backedUp = (await fresh.listBackupSessions()).flatMap((s) => s.files);
+    assert.ok(backedUp.includes("data/Map001.json") && backedUp.includes("js/plugins/New.js"));
     await assert.rejects(fresh.undoLastChangeset(), /No committed changeset/);
   });
 });
@@ -345,7 +354,9 @@ test("setRoot removes a crashed journal folder that has no manifest", async () =
     const crashed = path.join(dir, ".mcp-backups", "changesets", "2026-01-01T00-00-00-000Z");
     await fs.mkdir(path.join(crashed, "files", "data"), { recursive: true });
     await fs.writeFile(path.join(crashed, "files", "data", "Map001.json"), MAP_ORIGINAL, "utf8");
+    await fs.writeFile(path.join(crashed, "manifest.json.mcp-tmp"), '{"id":"2026-01-01T0', "utf8");
     await project.setRoot(dir);
+    assert.deepEqual(project.recoveryReport, []);
     assert.deepEqual(await changesetDirs(dir), []);
     assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
   });
@@ -436,5 +447,231 @@ test("writeText outside a changeset backs up, writes and records", async () => {
     const sessions = await project.listBackupSessions();
     assert.ok(sessions[0].files.includes("js/plugins.js"));
     assert.deepEqual(await project.externalChanges(), []);
+  });
+});
+
+// ---- final-review fix wave ----
+
+test("commit writes its manifest atomically (no manifest temp left behind)", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("atomic manifest");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const { id } = await project.commitChangeset();
+    const journal = path.join(dir, ".mcp-backups", "changesets", id);
+    assert.deepEqual((await fs.readdir(journal)).sort(), ["committed", "files", "manifest.json"]);
+  });
+});
+
+test("a failed commit whose rollback also fails closes the changeset and blocks edits until undo_changeset", async () => {
+  await withProject(async ({ dir, project }) => {
+    const actors = project.dataFile("Actors.json");
+    project.beginChangeset("doubly broken");
+    await project.writeJson(actors, [null, { id: 1, name: "New" }]);
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const realRename = fs.rename;
+    const realWriteFile = fs.writeFile;
+    let rolling = false;
+    fs.rename = async (from, to) => {
+      if (to === project.mapFile(1)) {
+        rolling = true;
+        throw new Error("simulated rename failure");
+      }
+      return realRename(from, to);
+    };
+    fs.writeFile = async (file, ...rest) => {
+      if (rolling && file === actors) throw new Error("simulated restore failure");
+      return realWriteFile(file, ...rest);
+    };
+    let message = "";
+    try {
+      await assert.rejects(project.commitChangeset(), (err) => {
+        message = err.message;
+        return err instanceof ProjectError;
+      });
+    } finally {
+      fs.rename = realRename;
+      fs.writeFile = realWriteFile;
+    }
+    assert.match(message, /undo_changeset/);
+    assert.doesNotMatch(message, /still open/);
+    assert.equal(project.changesetActive, false, "changeset closed so undo_changeset can run");
+
+    const blocked = (err) =>
+      err instanceof ProjectError && /undo_changeset/.test(err.message) && /partly rolled back/.test(err.message);
+    await assert.rejects(project.writeJson(project.dataFile("Items.json"), [null]), blocked);
+    assert.throws(() => project.beginChangeset("retry"), blocked);
+    await assert.rejects(project.commitChangeset(), blocked);
+    assert.equal(await exists(project.dataFile("Items.json")), false);
+
+    const undone = await project.undoLastChangeset();
+    assert.equal(undone.label, "doubly broken");
+    assert.equal(await read(actors), ACTORS_ORIGINAL);
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+    assert.deepEqual(await changesetDirs(dir), []);
+    // unblocked again
+    project.beginChangeset("retry");
+    await project.writeJson(project.dataFile("Items.json"), [null]);
+    await project.commitChangeset();
+  });
+});
+
+test("set_project after an interrupted commit backs up current files before restoring them", async () => {
+  await withProject(async ({ dir, project }) => {
+    const actors = project.dataFile("Actors.json");
+    project.beginChangeset("crashy");
+    await project.writeJson(actors, [null, { id: 1, name: "New" }]);
+    const { id } = await project.commitChangeset();
+    await fs.rm(path.join(dir, ".mcp-backups", "changesets", id, "committed"));
+    // the user edits the file in the MV editor before the next session
+    const editorText = '[null,{"id":1,"name":"Edited in the editor"}]';
+    await fs.writeFile(actors, editorText, "utf8");
+
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.equal(await read(actors), ACTORS_ORIGINAL);
+    const sessions = await fresh.listBackupSessions();
+    const newest = sessions[0];
+    assert.ok(newest.files.includes("data/Actors.json"));
+    assert.equal(await read(path.join(dir, ".mcp-backups", newest.session, "data", "Actors.json")), editorText);
+    assert.match(fresh.recoveryReport.join("\n"), /backup/);
+  });
+});
+
+test("an interrupted changeset older than a committed one is reported, not rolled back", async () => {
+  await withProject(async ({ dir, project }) => {
+    const actors = project.dataFile("Actors.json");
+    project.beginChangeset("newer");
+    await project.writeJson(actors, [null, { id: 1, name: "Newer work" }]);
+    await project.commitChangeset();
+    const newer = await read(actors);
+    const stale = path.join(dir, ".mcp-backups", "changesets", "2000-01-01T00-00-00-000Z");
+    await fs.mkdir(path.join(stale, "files", "data"), { recursive: true });
+    await fs.writeFile(path.join(stale, "files", "data", "Actors.json"), "[null]", "utf8");
+    await fs.writeFile(
+      path.join(stale, "manifest.json"),
+      JSON.stringify({ id: "2000-01-01T00-00-00-000Z", label: "stale", files: [{ path: "data/Actors.json", existed: true }] }),
+      "utf8"
+    );
+
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.equal(await read(actors), newer, "newer work is untouched");
+    assert.deepEqual(fresh.recoveredChangesets, []);
+    assert.equal(fresh.recoveryErrors.length, 1);
+    assert.match(fresh.recoveryErrors[0], /2000-01-01T00-00-00-000Z/);
+    assert.match(fresh.recoveryErrors[0], /older than/);
+    assert.equal(await exists(stale), true, "kept for the user to inspect");
+    // edits are not blocked by a stale entry
+    await fresh.writeJson(fresh.dataFile("Items.json"), [null]);
+  });
+});
+
+test("a commit cut off before any rename is reported as discarded, not rolled back", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("cut short");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const { id } = await project.commitChangeset();
+    // pretend the kill happened in step 3: target untouched, temp written, no marker
+    const newMap = await read(project.mapFile(1));
+    await fs.writeFile(project.mapFile(1), MAP_ORIGINAL, "utf8");
+    await fs.writeFile(project.mapFile(1) + ".mcp-tmp", newMap, "utf8");
+    await fs.rm(path.join(dir, ".mcp-backups", "changesets", id, "committed"));
+
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.deepEqual(fresh.recoveredChangesets, [id]);
+    assert.equal(fresh.recoveryReport.length, 1);
+    assert.match(fresh.recoveryReport[0], /Discarded interrupted changeset .*no project files had changed/);
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+    assert.equal(await exists(project.mapFile(1) + ".mcp-tmp"), false);
+  });
+});
+
+test("a torn manifest without a marker is removed once and does not block undo", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("good");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    await project.commitChangeset();
+    const torn = path.join(dir, ".mcp-backups", "changesets", "2999-01-01T00-00-00-000Z");
+    await fs.mkdir(path.join(torn, "files", "data"), { recursive: true });
+    await fs.writeFile(path.join(torn, "files", "data", "Map001.json"), "junk", "utf8");
+    await fs.writeFile(path.join(torn, "manifest.json"), '{"id":"2999-01-01T00-00', "utf8");
+
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.equal(await exists(torn), false);
+    assert.deepEqual(fresh.recoveryErrors, []);
+    await fresh.setRoot(dir);
+    assert.deepEqual(fresh.recoveryReport, [], "no warning on the next open");
+    assert.equal((await fresh.undoLastChangeset()).label, "good");
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+  });
+});
+
+test("changeset methods without a project throw No project selected", async () => {
+  const project = new Project();
+  assert.throws(() => project.beginChangeset("x"), /No project selected/);
+  assert.throws(() => project.discardChangeset(), /No project selected/);
+  await assert.rejects(project.commitChangeset(), /No project selected/);
+  await assert.rejects(project.undoLastChangeset(), /No project selected/);
+});
+
+const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
+
+test("changeset tools and editor_status before set_project return the No project selected error", async () => {
+  const client = new Client({ name: "changeset-test", version: "0.0.0" });
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [entry],
+      env: { ...process.env, RPGMV_TOOLS: "" },
+      stderr: "ignore",
+    })
+  );
+  try {
+    for (const [name, args] of [
+      ["editor_status", {}],
+      ["begin_changeset", { label: "x" }],
+      ["commit_changeset", {}],
+      ["discard_changeset", {}],
+      ["undo_changeset", {}],
+    ]) {
+      const res = await client.callTool({ name, arguments: args });
+      assert.equal(res.isError, true, name);
+      assert.match(res.content[0].text, /No project selected/, name);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+test("--project start-up logs and editor_status report a recovered commit", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("crash before restart");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const { id } = await project.commitChangeset();
+    await fs.rm(path.join(dir, ".mcp-backups", "changesets", id, "committed"));
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entry, "--project", dir],
+      env: { ...process.env, RPGMV_TOOLS: "" },
+      stderr: "pipe",
+    });
+    let stderr = "";
+    transport.stderr.on("data", (chunk) => (stderr += chunk));
+    const client = new Client({ name: "changeset-test", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      const res = await client.callTool({ name: "editor_status", arguments: {} });
+      assert.notEqual(res.isError, true);
+      const out = JSON.parse(res.content[0].text);
+      assert.equal(out.changesetRecovery.length, 1);
+      assert.match(out.changesetRecovery[0], new RegExp(`Rolled back interrupted changeset ${id}`));
+      assert.ok(stderr.includes(`[rpgmaker-mv-mcp] Rolled back interrupted changeset ${id}`), stderr);
+    } finally {
+      await client.close();
+    }
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
   });
 });

@@ -19,8 +19,16 @@ temp folder, and exercises every tool group.
 
 ```
 src/
-├── index.ts                 server entry point (stdio/HTTPS transport, --project flag)
-├── project.ts               project root handling, MV-style JSON I/O, automatic backups
+├── index.ts                 server entry point (stdio/HTTPS transport, --project and --tools flags)
+├── project.ts               project root handling, MV-style JSON/text I/O, automatic backups,
+│                            changeset staging/commit/undo, external-change tracking
+├── changeset.ts             changeset types and per-file change summaries (pure)
+├── profiles.ts              tool groups and --tools / RPGMV_TOOLS parsing (pure)
+├── editorStatus.ts          detects a running RPG Maker MV editor process
+├── commandList.ts           event command list building and validation (pure)
+├── passability.ts           map passability following MV's checkPassage rule (pure)
+├── lint.ts                  static checks for event command lists (lint_events)
+├── assets.ts                asset reference scan against the files on disk (audit_assets)
 ├── util.ts                  tool result helpers and error wrapping
 ├── tiles.ts                 tile-id encoding, autotile shapes, map painting (pure)
 ├── render.ts, png.ts        map renderer and the dependency-free PNG codec (pure)
@@ -42,18 +50,26 @@ src/
     ├── localizationTools.ts export_texts, import_texts
     ├── pluginTools.ts       js/plugins.js management and plugin source files
     ├── playtestTools.ts     NW.js / browser playtesting
-    └── maintenanceTools.ts  backups and project validation
+    ├── maintenanceTools.ts  backups, editor_status and project validation
+    ├── changesetTools.ts    begin/commit/discard/undo_changeset
+    └── analysisTools.ts     audit_assets, lint_events
 skills/                      bundled SKILL.md workflow guides (shipped in the npm package)
 scripts/
 ├── smoke.mjs                end-to-end smoke test
-└── run-unit.mjs             runs every test/*.test.mjs with node --test
-test/                        unit tests (node:test) for the pure modules: *.test.mjs
+└── run-unit.mjs             runs every test/*.test.mjs with node --test (Node 18 has no --test globs)
+test/                        unit tests (node:test, *.test.mjs) importing the compiled ../dist/ modules;
+                             run `npm run build` before `npm run test:unit`
 ```
 
 ## Guidelines
 
-- **Every write goes through a backup.** Use `project.writeJson()` (which backs up
-  automatically) or call `project.backup(path)` before any direct `fs` write.
+- **Every project write goes through `Project`.** Use `project.writeJson()` for data files
+  and `project.writeText()` for anything else (plugins.js, plugin sources, exported files).
+  They take the session backup, keep editor_status's external-change tracking accurate and,
+  while a changeset is open, stage the edit instead of writing it. Never write project files
+  with `fs` directly (and do not just call `project.backup()` before an `fs` write): that
+  bypasses an open changeset. Likewise read with `project.readJson()` / `readText()` and
+  check existence with `project.exists()`, so staged content is respected.
 - **Match the MV editor's file format.** Data arrays are 1-indexed with `null` at
   index 0; array files are written one element per line; ids must equal array
   positions. `project.writeJson()` handles the formatting.

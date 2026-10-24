@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     try {
       await project.setRoot(args[projectFlag + 1]);
       console.error(`[rpgmaker-mv-mcp] project: ${project.root}`);
+      for (const line of project.recoveryReport) console.error(`[rpgmaker-mv-mcp] ${line}`);
     } catch (err) {
       console.error(`[rpgmaker-mv-mcp] warning: ${(err as Error).message}`);
     }

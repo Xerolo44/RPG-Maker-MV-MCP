@@ -1,7 +1,7 @@
 // Static checks for event command lists (map events, common events, troop pages).
 // Pure logic lives in lintCommandList; lintProject loads the data and applies it everywhere.
 import { validateCommandList, type Cmd } from "./commandList.js";
-import type { Project } from "./project.js";
+import { ProjectError, type Project } from "./project.js";
 
 export type LintRule =
   | "unterminated-list"
@@ -193,6 +193,9 @@ export async function lintProject(
 
   const mapIds = new Set<number>();
   for (const info of mapInfos) if (isObj(info) && isInt(info.id)) mapIds.add(info.id);
+  if (opts.mapId !== undefined && !mapIds.has(opts.mapId)) {
+    throw new ProjectError(`map ${opts.mapId} is not listed in MapInfos.json. Use list_maps to see the map ids.`);
+  }
   const commonEventIds = new Set<number>();
   for (const ce of commonEvents) if (isObj(ce) && isInt(ce.id)) commonEventIds.add(ce.id);
 

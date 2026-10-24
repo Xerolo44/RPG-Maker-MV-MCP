@@ -63,6 +63,23 @@ test("no flag serves every tool", async () => {
   });
 });
 
+test("--tools analysis serves audit_assets and lint_events but not maintenance tools", async () => {
+  await withServer(["--tools", "analysis"], {}, async (client) => {
+    const names = await toolNames(client);
+    for (const n of ["audit_assets", "lint_events"]) assert.ok(names.includes(n), n);
+    for (const n of ["editor_status", "begin_changeset"]) assert.ok(!names.includes(n), n);
+  });
+});
+
+test("--tools maintenance serves the changeset tools and editor_status", async () => {
+  await withServer(["--tools", "maintenance"], {}, async (client) => {
+    const names = await toolNames(client);
+    for (const n of ["begin_changeset", "commit_changeset", "discard_changeset", "undo_changeset", "editor_status"]) {
+      assert.ok(names.includes(n), n);
+    }
+  });
+});
+
 test("RPGMV_TOOLS env applies and --tools wins over it", async () => {
   await withServer([], { RPGMV_TOOLS: "maps" }, async (client) => {
     const names = await toolNames(client);

@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { Project } from "../dist/project.js";
+import { Project, ProjectError } from "../dist/project.js";
 import { lintCommandList, lintProject } from "../dist/lint.js";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
@@ -278,6 +278,15 @@ test("lintProject: caps at 300 findings and reports how many were cut", async ()
     assert.equal(r.findings.length, 300);
     assert.equal(r.truncated, 50);
     assert.equal(r.counts.error, 350);
+  });
+});
+
+test("lintProject: a mapId not listed in MapInfos is an error, not an empty result", async () => {
+  await withProject(baseData(), async ({ project }) => {
+    await assert.rejects(
+      () => lintProject(project, { scope: "maps", mapId: 9, maxLineChars: 50, minSeverity: "info" }),
+      (err) => err instanceof ProjectError && /map 9 is not listed in MapInfos\.json/.test(err.message),
+    );
   });
 });
 

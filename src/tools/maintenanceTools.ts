@@ -90,6 +90,7 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
       inputSchema: {},
     },
     safe(async () => {
+      void project.root; // throws the standard "No project selected" error first
       const [editorRunning, externallyModifiedFiles] = await Promise.all([
         editorProcessRunning(),
         project.externalChanges(),
@@ -100,7 +101,13 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
           : editorRunning
             ? "The editor appears to be open. Edits made here will not show in the editor until the project is reloaded, and saving in the editor can overwrite them."
             : "No external changes detected.";
-      return textResult({ editorRunning, externallyModifiedFiles, advice });
+      const recovery = project.recoveryReport;
+      return textResult({
+        editorRunning,
+        externallyModifiedFiles,
+        advice,
+        changesetRecovery: recovery.length ? recovery : undefined,
+      });
     })
   );
 
