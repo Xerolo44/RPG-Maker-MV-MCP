@@ -235,6 +235,12 @@ const validation = await call("validate_project", {},
   (t) => t.includes('"ok": true') && t.includes("transfers the player to map 99"));
 if (!validation.includes('"errors": []')) { console.log("FAIL validation should have no errors"); failures++; }
 
+// asset audit: Actor1 face/character are referenced but absent; Test_A2 tileset exists
+await call("audit_assets", {}, (t) => t.includes("Actor1"));
+
+// lint: the 201 to map 99 added above targets a map that does not exist
+await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
+
 // map preview as PNG
 {
   const r = await client.callTool({ name: "render_map_image", arguments: { mapId: 1, tileSize: 16, showGrid: true } });
@@ -347,10 +353,32 @@ await call("install_skills", { skills: ["rpgmaker-balancing"] }, (t) => t.includ
 
 // backups: mangle a record, then restore it
 await call("list_backups", {}, (t) => t.includes("data/Actors.json"));
+await call("editor_status", {}, (t) => t.includes("externallyModifiedFiles"));
 await call("update_record", { type: "actors", id: 1, data: { name: "RUINED" } },
   (t) => t.includes("RUINED"));
 await call("restore_backup", { file: "data/Actors.json" }, (t) => t.includes("data/Actors.json"));
 await call("get_record", { type: "actors", id: 1 }, (t) => t.includes("Harold") && !t.includes("RUINED"));
+
+// changesets: staged edits stay off disk until commit, and undo rolls a commit back
+{
+  const map1 = path.join(dataDir, "Map001.json");
+  const onDisk = async () => (await fs.readFile(map1, "utf8")).includes("ChangesetChest");
+  const check = (label, ok) => {
+    console.log(`${ok ? "PASS" : "FAIL"} ${label}`);
+    if (!ok) failures++;
+  };
+  await call("begin_changeset", { label: "smoke chest" }, (t) => t.includes("smoke chest"));
+  await expectError("begin_changeset twice errors", "begin_changeset", { label: "again" }, "already open");
+  await call("create_event", { mapId: 1, name: "ChangesetChest", x: 1, y: 8 }, (t) => t.includes("ChangesetChest"));
+  check("staged event is not on disk before commit", !(await onDisk()));
+  await call("search_map_events", { query: "ChangesetChest" }, (t) => t.includes("ChangesetChest"));
+  await expectError("restore_backup is refused while a changeset is open", "restore_backup", {}, "changeset");
+  await call("commit_changeset", {}, (t) => t.includes("data/Map001.json") && t.includes("events +1"));
+  check("committed event is on disk", await onDisk());
+  await call("undo_changeset", {}, (t) => t.includes("restored"));
+  check("undone event is gone from disk", !(await onDisk()));
+  await expectError("commit_changeset with nothing open errors", "commit_changeset", {}, "No changeset is open");
+}
 
 await call("playtest_start", { mode: "browser", port: 8391 }, (t) => t.includes("http://127.0.0.1:8391"));
 const res = await fetch("http://127.0.0.1:8391/data/System.json");

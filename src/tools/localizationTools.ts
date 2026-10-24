@@ -1,5 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { Project, ProjectError } from "../project.js";
@@ -25,13 +24,8 @@ function inProject(project: Project, rel: string): string {
   return full;
 }
 
-async function readRows(file: string): Promise<Row[]> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, "utf8");
-  } catch {
-    throw new ProjectError(`File not found: ${file}`);
-  }
+async function readRows(project: Project, file: string): Promise<Row[]> {
+  const raw = await project.readText(file);
   const text = raw.replace(/^﻿/, "");
   if (file.toLowerCase().endsWith(".json") || /^\s*[[{]/.test(text)) {
     let data: unknown;
@@ -80,9 +74,8 @@ export function registerLocalizationTools(server: McpServer, project: Project): 
       const target = inProject(project, file ?? `localization/texts.${format}`);
 
       let carried = new Map<string, string>();
-      const exists = await fs.access(target).then(() => true, () => false);
-      if (exists) {
-        const old = await readRows(target).catch(() => []);
+      if (await project.exists(target)) {
+        const old = await readRows(project, target).catch(() => []);
         carried = new Map(old.filter((r) => r.translation !== "").map((r) => [r.key, r.translation]));
       }
       const keys = new Set(collected.items.map((i) => i.key));
@@ -96,9 +89,7 @@ export function registerLocalizationTools(server: McpServer, project: Project): 
           ? JSON.stringify(rows, null, 2)
           : "﻿" + toCsv([["key", "context", "original", "translation"], ...rows.map((r) => [r.key, r.context ?? "", r.original ?? "", r.translation])]);
 
-      await project.backup(target);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, body, "utf8");
+      await project.writeText(target, body);
 
       const byCategory: Record<string, number> = {};
       for (const i of collected.items) byCategory[i.category] = (byCategory[i.category] ?? 0) + 1;
@@ -130,7 +121,7 @@ export function registerLocalizationTools(server: McpServer, project: Project): 
       },
     },
     safe(async ({ file, dryRun, force }) => {
-      const rows = await readRows(inProject(project, file));
+      const rows = await readRows(project, inProject(project, file));
       const collected = await collectTexts(project, SCOPES);
       const byKey = new Map(collected.items.map((i) => [i.key, i]));
 
