@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { terminated, validateCommandList } from "../commandList.js";
 import { compileDialogue, dialogueNodeSchema } from "../dialogueTree.js";
+import { buildTemplate, templateFieldShape, templateParamsSchema } from "../eventTemplates.js";
 import { ProjectError, type Project } from "../project.js";
 import { safe, textResult } from "../util.js";
 import { insertEventCommands } from "./mapTools.js";
@@ -71,6 +72,61 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
         problems,
         ...(showPreview ? { preview: commands } : {}),
       });
+    }),
+  );
+
+  server.registerTool(
+    "create_event_from_template",
+    {
+      title: "Create event from template",
+      description:
+        "Creates a complete, ready-to-use map event at (x, y) from a template, in one write. Refuses out-of-bounds tiles, and refuses a tile that already holds an event unless allowStack is true. " +
+        "Graphics default to none: events are INVISIBLE in game until an image is supplied (chest: closedImage/openImage, npc: image; locked_door, inn, shop and save_point never get a graphic and are meant to sit on a tile that already looks right). " +
+        "Templates and their params: " +
+        "chest {reward: {gold?, item?: {type: item|weapon|armor, id, count?}}, message?, closedImage?, openImage?} (two pages: the action button opens it and sets self switch A, then an empty opened page); " +
+        "locked_door {keyItemId, destination: {mapId, x, y, direction?: 0|2|4|6|8}, lockedMessage?, consumeKey?} (transfers the player if the party holds the key); " +
+        "inn {price, greeting?} (Stay/Leave choice; staying charges gold, fades out, restores the party, fades in); " +
+        "shop {goods: [{type: item|weapon|armor, id, price?}] (1-40; price defaults to the database price), purchaseOnly?}; " +
+        "save_point {} (opens the save screen); " +
+        "npc {lines: string[], face?: {name, index}, image?}. " +
+        "Image = {characterName, characterIndex (0-7), direction?: 2|4|6|8, pattern?: 0|1|2}. " +
+        "Returns { eventId, name, pages }.",
+      inputSchema: {
+        mapId: z.number().int().min(1),
+        x: z.number().int().min(0),
+        y: z.number().int().min(0),
+        name: z.string().optional().describe("Event name; defaults to the template name (Chest, Door, Inn, Shop, Save Point, NPC)"),
+        allowStack: z.boolean().default(false).describe("Allow placing the event on a tile that already has an event"),
+        ...templateFieldShape,
+      },
+    },
+    safe(async ({ mapId, x, y, name, allowStack, ...fields }) => {
+      void project.root; // throws the standard "No project selected" error first
+      const given = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
+      const parsed = templateParamsSchema.safeParse(given);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.map((i) => (i.path.length > 0 ? `${i.path.join(".")}: ` : "") + i.message);
+        throw new ProjectError(`Invalid ${fields.template} template params: ${issues.join("; ")}`);
+      }
+      const { defaultName, pages } = buildTemplate(parsed.data);
+
+      const file = project.mapFile(mapId);
+      const map = await project.readJson<{ width: number; height: number; events?: ({ id: number; x: number; y: number } | null)[] }>(file);
+      if (x >= map.width || y >= map.height) {
+        throw new ProjectError(`Position (${x}, ${y}) is outside map ${mapId} (${map.width}x${map.height}).`);
+      }
+      if (!Array.isArray(map.events) || map.events.length === 0) map.events = [null];
+      const occupant = map.events.find((e) => e && e.x === x && e.y === y);
+      if (occupant && !allowStack) {
+        throw new ProjectError(
+          `Tile (${x}, ${y}) on map ${mapId} is already occupied by event ${occupant.id}. Pick another tile or pass allowStack: true.`,
+        );
+      }
+      const eventId = map.events.length;
+      const eventName = name ?? defaultName;
+      map.events.push({ id: eventId, name: eventName, x, y, note: "", pages } as never);
+      await project.writeJson(file, map);
+      return textResult({ eventId, name: eventName, pages: pages.length });
     }),
   );
 }

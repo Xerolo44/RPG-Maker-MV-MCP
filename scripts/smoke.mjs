@@ -158,6 +158,13 @@ await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
 await call("search_map_events", { query: "of course", searchCommands: true },
   (t) => t.includes('"eventId": 2') && t.includes("command 102"));
 
+// create_event_from_template: a chest on a free tile, then an occupied-tile refusal
+await call("create_event_from_template", { mapId: 1, x: 6, y: 6, template: "chest",
+  reward: { gold: 100 }, message: "Found 100G!" },
+  (t) => t.includes('"eventId"') && t.includes('"pages": 2'));
+await expectError("create_event_from_template refuses an occupied tile", "create_event_from_template",
+  { mapId: 1, x: 6, y: 6, template: "save_point" }, "allowStack");
+
 // map creation
 await call("create_map", { name: "Cave", width: 20, height: 15 },
   (t) => t.includes('"mapId": 2'));
