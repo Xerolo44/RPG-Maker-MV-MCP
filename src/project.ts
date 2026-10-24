@@ -46,6 +46,8 @@ export class Project {
   private rootDir: string | null = null;
   private sessionStamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   private backedUp = new Set<string>();
+  /** Size/mtime of each file this server last wrote, keyed by absolute path. */
+  private writeSignatures = new Map<string, { size: number; mtimeMs: number }>();
 
   get root(): string {
     if (!this.rootDir) {
@@ -79,6 +81,7 @@ export class Project {
     }
     this.rootDir = resolved;
     this.backedUp.clear();
+    this.writeSignatures.clear();
   }
 
   get backupRoot(): string {
@@ -191,6 +194,45 @@ export class Project {
       text = JSON.stringify(value);
     }
     await fs.writeFile(filePath, text, "utf8");
+    await this.recordWrite(filePath);
+  }
+
+  /**
+   * Remember the size/mtime of a file this server just wrote, so externalChanges()
+   * can later tell if something else (typically the MV editor) overwrote it.
+   * Anything that writes project files without going through writeJson (restore_backup,
+   * changeset commits) must call this afterwards.
+   */
+  async recordWrite(filePath: string): Promise<void> {
+    try {
+      const { size, mtimeMs } = await fs.stat(filePath);
+      this.writeSignatures.set(filePath, { size, mtimeMs });
+    } catch {
+      this.writeSignatures.delete(filePath);
+    }
+  }
+
+  /** Stop tracking a file (e.g. one the server deleted on purpose). */
+  forgetWrite(filePath: string): void {
+    this.writeSignatures.delete(filePath);
+  }
+
+  /**
+   * Project-relative paths (forward slashes) written by this server whose size or
+   * mtime on disk now differs from what we last wrote. A missing file counts as changed.
+   */
+  async externalChanges(): Promise<string[]> {
+    const changed: string[] = [];
+    for (const [filePath, sig] of this.writeSignatures) {
+      try {
+        const { size, mtimeMs } = await fs.stat(filePath);
+        if (size === sig.size && mtimeMs === sig.mtimeMs) continue;
+      } catch {
+        // missing or unreadable: treat as changed
+      }
+      changed.push(path.relative(this.root, filePath).replace(/\\/g, "/"));
+    }
+    return changed.sort();
   }
 
   async readDatabase(type: DatabaseType): Promise<unknown[]> {

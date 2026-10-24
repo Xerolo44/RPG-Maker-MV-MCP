@@ -5,6 +5,7 @@ import path from "node:path";
 import { Project, DATABASE_TYPES, ProjectError } from "../project.js";
 import { readPluginList } from "./pluginTools.js";
 import { safe, textResult } from "../util.js";
+import { editorProcessRunning } from "../editorStatus.js";
 
 interface EventCommand {
   code: number;
@@ -68,9 +69,33 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
         await project.backup(dest);
         await fs.mkdir(path.dirname(dest), { recursive: true });
         await fs.copyFile(source, dest);
+        await project.recordWrite(dest);
         restored.push(rel);
       }
       return textResult({ restoredFrom: chosen.session, restored });
+    })
+  );
+
+  server.registerTool(
+    "editor_status",
+    {
+      title: "Editor status",
+      description:
+        "Check whether the RPG Maker MV editor appears to be running and which files this server wrote have since been changed by something else (usually the editor saving over them). Report only: it never blocks or undoes any edit.",
+      inputSchema: {},
+    },
+    safe(async () => {
+      const [editorRunning, externallyModifiedFiles] = await Promise.all([
+        editorProcessRunning(),
+        project.externalChanges(),
+      ]);
+      const advice =
+        externallyModifiedFiles.length > 0
+          ? "The editor (or another program) overwrote files this server edited, so those edits may be lost. Re-check them, and use list_backups / restore_backup to recover earlier versions. Close the project in the editor, or reload it after each batch of edits, to avoid this."
+          : editorRunning
+            ? "The editor appears to be open. Edits made here will not show in the editor until the project is reloaded, and saving in the editor can overwrite them."
+            : "No external changes detected.";
+      return textResult({ editorRunning, externallyModifiedFiles, advice });
     })
   );
 

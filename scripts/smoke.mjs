@@ -347,6 +347,7 @@ await call("install_skills", { skills: ["rpgmaker-balancing"] }, (t) => t.includ
 
 // backups: mangle a record, then restore it
 await call("list_backups", {}, (t) => t.includes("data/Actors.json"));
+await call("editor_status", {}, (t) => t.includes("externallyModifiedFiles"));
 await call("update_record", { type: "actors", id: 1, data: { name: "RUINED" } },
   (t) => t.includes("RUINED"));
 await call("restore_backup", { file: "data/Actors.json" }, (t) => t.includes("data/Actors.json"));
