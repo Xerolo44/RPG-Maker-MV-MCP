@@ -3,6 +3,7 @@
 // autotile rules and the sheet layout); it does not recognise any tileset by its name.
 
 import { z } from "zod";
+import { floorWalkable, wallBlocking } from "./passability.js";
 import { type MvTileset, tileSpecSchema } from "./tools/tileTools.js";
 import {
   KIND_RANGE,
@@ -36,8 +37,9 @@ export const tileProfileSchema = z.object({
     .describe("Optional decoration tiles scattered on the floor, picked in proportion to their weight"),
 });
 
-// Same reading of the flags as get_tileset_info: all four direction bits set means blocked.
-const isBlocked = (flags: number[], id: number): boolean => ((flags[id] ?? 0) & 0xf) === 0xf;
+// Floor and wall tiles are judged by the same rule passableGrid uses to verify generated maps.
+const walkable = (flags: number[], id: number): boolean => floorWalkable(flags[id] ?? 0);
+const blocking = (flags: number[], id: number): boolean => wallBlocking(flags[id] ?? 0);
 
 const hasImage = (tileset: MvTileset, sheet: Sheet): boolean => !!tileset.tilesetNames?.[SHEET_NAME_INDEX[sheet]];
 
@@ -70,10 +72,11 @@ function wallTopAbove(kind: number): number | undefined {
 
 /**
  * Propose a profile from tileset data. Heuristic:
- * - floor: the lowest-numbered A2 kind whose flags say passable, else the first passable A5 tile;
- * - wall: the lowest-numbered A4 kind drawn with the wall rule whose flags say impassable,
- *   else the first impassable A5 tile, else the first impassable B tile;
- * - wallTop: only for an A4 wall, the floor-rule A4 kind drawn directly above it on the sheet;
+ * - floor: the lowest-numbered A2 kind that is walkable (floorWalkable), else the first walkable A5 tile;
+ * - wall: the lowest-numbered A4 kind drawn with the wall rule that blocks movement (wallBlocking),
+ *   else the first blocking A5 tile, else the first blocking B tile;
+ * - wallTop: only for an A4 wall, the floor-rule A4 kind drawn directly above it on the sheet,
+ *   and only when it blocks movement too (painted over the wall it decides the cell's passage);
  * - decor: never suggested.
  * Sheets without an assigned image are skipped. Every choice adds a line to `notes`.
  * Throws a TileError when no floor or wall tile can be found.
@@ -85,48 +88,53 @@ export function suggestTileProfile(tileset: MvTileset): { profile: TileProfile; 
   ];
 
   let floor: TileSpec;
-  const floorKind = hasImage(tileset, "A2") ? firstKind("A2", (k) => !isBlocked(flags, autotileId(k))) : undefined;
+  const floorKind = hasImage(tileset, "A2") ? firstKind("A2", (k) => walkable(flags, autotileId(k))) : undefined;
   if (floorKind !== undefined) {
     floor = { sheet: "A2", kind: floorKind };
-    notes.push(`floor: A2 kind ${floorKind}, the lowest-numbered A2 ground kind whose flags say passable.`);
+    notes.push(`floor: A2 kind ${floorKind}, the lowest-numbered A2 ground kind that is walkable (no direction blocked).`);
   } else {
-    const why = hasImage(tileset, "A2") ? "A2 has no passable kind" : "A2 has no image";
-    const index = hasImage(tileset, "A5") ? firstIndex("A5", (id) => !isBlocked(flags, id)) : undefined;
+    const why = hasImage(tileset, "A2") ? "A2 has no walkable kind" : "A2 has no image";
+    const index = hasImage(tileset, "A5") ? firstIndex("A5", (id) => walkable(flags, id)) : undefined;
     if (index === undefined) {
-      const a5 = hasImage(tileset, "A5") ? "A5 has no passable tile" : "A5 has no image";
+      const a5 = hasImage(tileset, "A5") ? "A5 has no walkable tile" : "A5 has no image";
       throw new TileError(`No floor tile found in tileset ${tileset.id}: ${why} and ${a5}. Give the floor tile yourself.`);
     }
     floor = { sheet: "A5", index };
-    notes.push(`floor: A5 #${index}, the first passable A5 tile (${why}).`);
+    notes.push(`floor: A5 #${index}, the first walkable A5 tile (${why}).`);
   }
 
   let wall: TileSpec | undefined;
   let wallTop: TileSpec | undefined;
   const wallKind = hasImage(tileset, "A4")
-    ? firstKind("A4", (k) => tableType(k) === "wall" && isBlocked(flags, autotileId(k)))
+    ? firstKind("A4", (k) => tableType(k) === "wall" && blocking(flags, autotileId(k)))
     : undefined;
   if (wallKind !== undefined) {
     wall = { sheet: "A4", kind: wallKind };
-    notes.push(`wall: A4 kind ${wallKind}, the lowest-numbered A4 kind drawn with the wall rule whose flags say impassable.`);
+    notes.push(`wall: A4 kind ${wallKind}, the lowest-numbered A4 kind drawn with the wall rule that blocks movement.`);
     const topKind = wallTopAbove(wallKind);
-    if (topKind !== undefined) {
-      wallTop = { sheet: "A4", kind: topKind };
-      notes.push(`wallTop: A4 kind ${topKind}, the floor-rule A4 kind drawn directly above kind ${wallKind} on the sheet.`);
-    } else {
+    if (topKind === undefined) {
+      // Not reached with MV's A4 layout: every wall-side kind has a wall-top kind above it.
       notes.push(`wallTop: not set, no floor-rule A4 kind is drawn directly above kind ${wallKind} on the sheet.`);
+    } else if (!blocking(flags, autotileId(topKind))) {
+      notes.push(
+        `wallTop: not set; A4 kind ${topKind}, drawn above kind ${wallKind} on the sheet, does not block movement, so painting it over walls would make them walkable.`
+      );
+    } else {
+      wallTop = { sheet: "A4", kind: topKind };
+      notes.push(`wallTop: A4 kind ${topKind}, the floor-rule A4 kind drawn directly above kind ${wallKind} on the sheet; it blocks movement.`);
     }
   } else {
-    const why = hasImage(tileset, "A4") ? "A4 has no impassable wall-rule kind" : "A4 has no image";
+    const why = hasImage(tileset, "A4") ? "A4 has no wall-rule kind that blocks movement" : "A4 has no image";
     for (const sheet of ["A5", "B"] as const) {
-      const index = hasImage(tileset, sheet) ? firstIndex(sheet, (id) => isBlocked(flags, id)) : undefined;
+      const index = hasImage(tileset, sheet) ? firstIndex(sheet, (id) => blocking(flags, id)) : undefined;
       if (index === undefined) continue;
       wall = { sheet, index };
-      notes.push(`wall: ${sheet} #${index}, the first impassable ${sheet} tile (${why}).`);
+      notes.push(`wall: ${sheet} #${index}, the first ${sheet} tile that blocks movement (${why}).`);
       break;
     }
     if (!wall) {
       throw new TileError(
-        `No wall tile found in tileset ${tileset.id}: ${why} and no A5 or B sheet with an image has an impassable tile. Give the wall tile yourself.`
+        `No wall tile found in tileset ${tileset.id}: ${why} and no A5 or B sheet with an image has a tile that blocks movement. Give the wall tile yourself.`
       );
     }
     notes.push("wallTop: not set, because the wall is not an A4 wall kind.");
@@ -138,7 +146,10 @@ export function suggestTileProfile(tileset: MvTileset): { profile: TileProfile; 
   return { profile, notes };
 }
 
-/** Problems with a profile on a tileset: invalid tiles, sheets without an image, an impassable floor, a passable wall. */
+/**
+ * Problems with a profile on a tileset: invalid tiles, sheets without an image, a floor that is not
+ * walkable, a wall or wall top that does not block movement (judged like passableGrid).
+ */
 export function profileProblems(profile: TileProfile, tileset: MvTileset): string[] {
   const flags = tileset.flags ?? [];
   const roles: [string, TileSpec][] = [
@@ -166,11 +177,11 @@ export function profileProblems(profile: TileProfile, tileset: MvTileset): strin
     if (!hasImage(tileset, tile.sheet)) {
       problems.push(`${role}: ${name} is on sheet ${tile.sheet}, which has no image in tileset ${tileset.id}, so it would be invisible.`);
     }
-    if (role === "floor" && isBlocked(flags, tile.id)) {
-      problems.push(`floor: ${name} is impassable, so the floor could not be walked on.`);
+    if (role === "floor" && !walkable(flags, tile.id)) {
+      problems.push(`floor: ${name} is not walkable (a direction is blocked), so floor cells would count as blocked.`);
     }
-    if (role === "wall" && !isBlocked(flags, tile.id)) {
-      problems.push(`wall: ${name} is passable, so the player could walk through walls.`);
+    if ((role === "wall" || role === "wallTop") && !blocking(flags, tile.id)) {
+      problems.push(`${role}: ${name} does not block movement, so the player could walk through walls.`);
     }
   }
   return problems;

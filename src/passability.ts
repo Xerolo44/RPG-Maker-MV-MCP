@@ -2,6 +2,16 @@
 
 const LAYERS = 4; // tile layers 0-3; layers 4 (shadow) and 5 (region) do not affect passage
 
+/** A tile that decides its cell as walkable: no direction bit set (the star bit does not matter). */
+export function floorWalkable(flag: number): boolean {
+  return (flag & 0x0f) === 0;
+}
+
+/** A tile that decides its cell as blocked: not drawn above characters (star bit 0x10) and some direction bit set. */
+export function wallBlocking(flag: number): boolean {
+  return (flag & 0x10) === 0 && (flag & 0x0f) !== 0;
+}
+
 /**
  * Walkability grid (1 = walkable) for a map's tile data and its tileset flags.
  * Layers 3 -> 0 are scanned; tiles whose flag has the star bit (0x10) are skipped;
@@ -19,7 +29,7 @@ export function passableGrid(map: { width: number; height: number; data: number[
         if (id === 0) continue;
         const flag = flags[id] ?? 0;
         if (flag & 0x10) continue;
-        walkable = (flag & 0x0f) === 0 ? 1 : 0;
+        walkable = floorWalkable(flag) ? 1 : 0;
         break;
       }
       out[y * width + x] = walkable;
