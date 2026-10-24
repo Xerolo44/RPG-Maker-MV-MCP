@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { encodePng, pngInfo, PngError, scaleDownNearest } from "../dist/png.js";
+import zlib from "node:zlib";
+import { decodePng, encodePng, pngInfo, pngIsInterlaced, PngError, scaleDownNearest } from "../dist/png.js";
 
 const solid = (width, height, rgba = [10, 20, 30, 255]) => {
   const data = new Uint8Array(width * height * 4);
@@ -65,4 +66,63 @@ test("scaleDownNearest never goes below 1 px and handles tall bitmaps", () => {
   assert.equal(tall.width, 1);
   assert.equal(tall.height, 10);
   assert.throws(() => scaleDownNearest(solid(4, 4), 0), PngError);
+});
+
+// ---- decodePng: bounded inflate ----
+
+/** PNG with the given IHDR fields and raw IDAT payload. The CRCs are zero: decodePng does not check them. */
+function craftedPng({ width, height, depth = 8, colorType = 6, interlace = 0, idat }) {
+  const chunkOf = (type, data) => {
+    const out = Buffer.alloc(data.length + 12);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "ascii");
+    data.copy(out, 8);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = depth;
+  ihdr[9] = colorType;
+  ihdr[12] = interlace;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunkOf("IHDR", ihdr),
+    chunkOf("IDAT", idat),
+    chunkOf("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+test("decodePng refuses an IDAT that inflates far beyond what the header allows, quickly", () => {
+  const idat = zlib.deflateSync(Buffer.alloc(64 * 1024 * 1024)); // ~64 KB on disk, 64 MB inflated
+  const file = craftedPng({ width: 1, height: 1, idat });
+  const started = Date.now();
+  assert.throws(() => decodePng(file), (e) => e instanceof PngError && /larger than its header allows/.test(e.message));
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("decodePng refuses data for a bigger image than the header claims, and corrupt data, with PngError", () => {
+  const big = zlib.deflateSync(Buffer.alloc(100 * 101 * 4));
+  assert.throws(() => decodePng(craftedPng({ width: 4, height: 4, idat: big })), PngError);
+  assert.throws(() => decodePng(craftedPng({ width: 4, height: 4, idat: Buffer.from("not zlib data") })), (e) => e instanceof PngError && /corrupt/.test(e.message));
+});
+
+test("decodePng still decodes 1-bit grayscale, 16-bit RGB and a few trailing bytes", () => {
+  // 1-bit gray 8x2: row filters 0, bits 10100000 and 01010000 -> white/black alternating
+  const gray = decodePng(craftedPng({ width: 8, height: 2, depth: 1, colorType: 0, idat: zlib.deflateSync(Buffer.from([0, 0xa0, 0, 0x50])) }));
+  assert.deepEqual([...gray.data.slice(0, 8)], [255, 255, 255, 255, 0, 0, 0, 255]);
+  assert.deepEqual([...gray.data.slice(8 * 4, 8 * 4 + 8)], [0, 0, 0, 255, 255, 255, 255, 255]);
+  const rgb16 = decodePng(craftedPng({ width: 1, height: 1, depth: 16, colorType: 2, idat: zlib.deflateSync(Buffer.from([0, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00])) }));
+  assert.deepEqual([...rgb16.data], [255, 128, 0, 255]);
+  const padded = decodePng(craftedPng({ width: 1, height: 1, idat: zlib.deflateSync(Buffer.concat([Buffer.from([0, 1, 2, 3, 4]), Buffer.alloc(100)])) }));
+  assert.deepEqual([...padded.data], [1, 2, 3, 4]);
+});
+
+test("pngIsInterlaced reads the IHDR interlace byte from the first 29 bytes", () => {
+  const plain = craftedPng({ width: 1, height: 1, idat: zlib.deflateSync(Buffer.alloc(5)) });
+  const adam7 = craftedPng({ width: 1, height: 1, interlace: 1, idat: zlib.deflateSync(Buffer.alloc(5)) });
+  assert.equal(pngIsInterlaced(plain.subarray(0, 29)), false);
+  assert.equal(pngIsInterlaced(adam7.subarray(0, 29)), true);
+  assert.equal(pngIsInterlaced(adam7.subarray(0, 20)), false);
+  assert.equal(pngIsInterlaced(Buffer.from("not a png at all, really, no")), false);
 });

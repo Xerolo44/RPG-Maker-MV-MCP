@@ -117,14 +117,23 @@ export interface AssetInfo {
   warnings: string[];
 }
 
+/**
+ * MV draws a character sheet as a single character when the leading run of `!` and `$`
+ * characters contains a `$` (`$Boss`, `!$Chest` and `$!Door` do; `!Door` and `Door$x` do not).
+ */
+export function isSingleCharacterSheet(name: string): boolean {
+  return /^[!$]*\$/.test(name);
+}
+
 function dimensionWarnings(folder: AssetFolder, name: string, width: number, height: number): string[] {
   const size = `${width}x${height}`;
   switch (folder) {
     case "img/characters": {
-      const [w, h] = name.startsWith("$") ? [3, 4] : [12, 8];
+      const single = isSingleCharacterSheet(name);
+      const [w, h] = single ? [3, 4] : [12, 8];
       return width % w === 0 && height % h === 0
         ? []
-        : [`Character sheet is ${size}; expected width a multiple of ${w} and height a multiple of ${h} (${name.startsWith("$") ? "single-character '$' sheet" : "8-character sheet"}).`];
+        : [`Character sheet is ${size}; expected width a multiple of ${w} and height a multiple of ${h} (${single ? "single-character '$' sheet" : "8-character sheet"}).`];
     }
     case "img/faces":
       return width % 144 === 0 && height % 144 === 0

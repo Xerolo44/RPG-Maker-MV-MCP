@@ -13,7 +13,7 @@ import {
   isImageFolder,
   validateAssetName,
 } from "./assetFormats.js";
-import { pngInfo } from "./png.js";
+import { pngInfo, pngIsInterlaced } from "./png.js";
 import { type Project, ProjectError } from "./project.js";
 
 export interface AssetEntry {
@@ -32,7 +32,7 @@ export interface AssetEntry {
 }
 
 export interface AssetListing {
-  folders: { folder: AssetFolder; total: number; files: AssetEntry[] }[];
+  folders: { folder: AssetFolder; total: number; files: AssetEntry[]; /** Set when the folder could not be listed (e.g. permission denied). */ error?: string }[];
   /** Files left out because of `limit`, over all folders. */
   truncated: number;
   /** Set when usage could not be worked out (a data file could not be read); usedBy/unused are then left out. */
@@ -94,6 +94,9 @@ function describe(folder: AssetFolder, name: string, ext: string, head: Buffer, 
     } else {
       try {
         Object.assign(out, pngInfo(head));
+        if (pngIsInterlaced(head)) {
+          warnings.push("Interlaced PNG: preview_asset and the map renderer cannot read interlaced images; re-save it without interlacing.");
+        }
       } catch {
         warnings.push("Unreadable PNG header.");
       }
@@ -171,7 +174,14 @@ export async function listAssets(
   const folders: AssetListing["folders"] = [];
   let truncated = 0;
   for (const folder of wanted) {
-    const all = await candidateFiles(root, folder);
+    let all;
+    try {
+      all = await candidateFiles(root, folder);
+    } catch (err) {
+      // one unreadable folder must not fail the whole listing
+      folders.push({ folder, total: 0, files: [], error: err instanceof ProjectError ? err.message : `Cannot list ${folder}.` });
+      continue;
+    }
     const shown = all.slice(0, opts.limit);
     const files = await entriesFor(root, folder, shown);
     if (covered.has(folder)) {

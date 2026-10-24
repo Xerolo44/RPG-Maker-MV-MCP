@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { isSingleCharacterSheet } from "../assetFormats.js";
 import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
 import { Bitmap, decodePng, encodePng } from "../png.js";
@@ -164,7 +165,7 @@ async function prepareRender(project: Project, mapId: number, opts: RenderOption
           if (!sheet) problems.push(`Character image ${image.characterName}.png could not be read; event sprites using it are skipped.`);
         }
         if (sheet) {
-          const single = image.characterName.startsWith("$");
+          const single = isSingleCharacterSheet(image.characterName);
           const cw = sheet.width / (single ? 3 : 12);
           const ch = sheet.height / (single ? 4 : 8);
           const baseX = single ? 0 : (image.characterIndex % 4) * 3 * cw;

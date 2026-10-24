@@ -70,6 +70,9 @@ function paeth(a: number, b: number, c: number): number {
   return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
 }
 
+/** Bytes of trailing data tolerated after the image data when inflating. */
+const INFLATE_SLACK = 4096;
+
 export function decodePng(buf: Buffer): Bitmap {
   if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("Not a PNG file.");
   let width = 0;
@@ -107,11 +110,22 @@ export function decodePng(buf: Buffer): Bitmap {
   if (colorType === 3 && !palette) throw new PngError("Palette PNG without a palette.");
   if (width * height > 64_000_000) throw new PngError("PNG is too large.");
 
-  const raw = zlib.inflateSync(Buffer.concat(idat));
   const bitsPerPixel = channels * depth;
   const bpp = Math.max(1, bitsPerPixel >> 3);
   const stride = Math.ceil((width * bitsPerPixel) / 8);
-  if (raw.length < (stride + 1) * height) throw new PngError("PNG data is truncated.");
+  // The header says how many bytes the image data must inflate to; refuse to inflate more than
+  // that (plus a little slack for encoders that pad the stream), so a small file cannot expand
+  // into gigabytes. Corrupt streams and over-long ones both become PngError.
+  const expected = (stride + 1) * height;
+  let raw: Buffer;
+  try {
+    raw = zlib.inflateSync(Buffer.concat(idat), { maxOutputLength: expected + INFLATE_SLACK });
+  } catch (e) {
+    throw new PngError(
+      (e as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE" ? "PNG data is larger than its header allows." : "PNG data is corrupt."
+    );
+  }
+  if (raw.length < expected) throw new PngError("PNG data is truncated.");
 
   // Undo the per-row filters in place.
   const pixels = Buffer.alloc(stride * height);
@@ -204,6 +218,14 @@ export function pngInfo(buf: Buffer): { width: number; height: number } {
     throw new PngError("PNG header has invalid dimensions.");
   }
   return { width, height };
+}
+
+/**
+ * True when the IHDR interlace byte (offset 28, inside the first 29 bytes) is set. False for
+ * anything that is too short or not a PNG; use `pngInfo` to validate the header itself.
+ */
+export function pngIsInterlaced(buf: Buffer): boolean {
+  return buf.length >= 29 && buf.subarray(0, 8).equals(SIGNATURE) && buf[28] !== 0;
 }
 
 /**

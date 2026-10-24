@@ -12,9 +12,10 @@ import {
   checkSourcePath,
   inspectAsset,
   isImageFolder,
+  isSingleCharacterSheet,
   validateAssetName,
 } from "../assetFormats.js";
-import { PngError, decodePng, encodePng, scaleDownNearest } from "../png.js";
+import { PngError, decodePng, encodePng, pngInfo, scaleDownNearest } from "../png.js";
 import { BINARY_IN_CHANGESET, Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
 
@@ -110,12 +111,15 @@ async function listFolder(dir: string): Promise<{ name: string; isFile: boolean 
 
 const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
+/** preview_asset refuses images with more pixels than this (decoding takes ~4 bytes per pixel plus working copies). */
+const MAX_PREVIEW_PIXELS = 16_000_000;
+
 const IMAGE_FOLDERS = ASSET_FOLDERS.filter(isImageFolder) as unknown as [AssetFolder, ...AssetFolder[]];
 
 /** Describes the frame layout a sheet in `folder` is expected to have, from its name and size. */
 function layoutNote(folder: AssetFolder, name: string, width: number, height: number): string {
   if (folder === "img/characters") {
-    const single = name.startsWith("$");
+    const single = isSingleCharacterSheet(name);
     const [cols, rows] = single ? [3, 4] : [12, 8];
     const frame =
       width % cols === 0 && height % rows === 0
@@ -208,8 +212,10 @@ export function registerAssetTools(server: McpServer, project: Project): void {
         "List the image and sound files in the project's asset folders (img/* and audio/*, 18 folders; all of them or one `folder`). " +
         "Each file shows its name (without extension), ext, size in bytes and, for images, the pixel size read from the PNG header, plus warnings (a header that does not match the extension, or a sheet size that does not fit the folder). " +
         "Only the first 64 bytes of each file are read, so a sound's type is judged from its header alone, not the codec or the whole file. Sub-directories and files with other extensions (.rpgmvp, .txt, ...) are skipped. " +
-        "With includeUsage (default true), files in the folders the reference scan covers (all except img/system and img/animations) get usedBy (at most 3 places, e.g. 'Actor 1', 'Map003 event 5') and unused (true when nothing in the database, maps, common events or troops references the name; letter case matters). " +
+        "With includeUsage (default true), files in the folders the reference scan covers (all except img/system and img/animations) get usedBy (at most 3 places, e.g. 'Actor 1', 'Map003 event 5') and unused (true when nothing in the database, maps, common events or troops references the name). Names are matched case-sensitively, so a reference that differs only in letter case shows the file as unused: run audit_assets to find case mismatches and missing files. " +
         "A plugin or script that loads a file by name is not seen, so check before deleting. " +
+        "Files with names outside the import rule (dots, non-ASCII) are listed too, but preview_asset cannot open them. " +
+        "Interlaced PNGs are flagged in warnings. A folder that cannot be read gets an `error` on its entry instead of failing the listing. " +
         "Files are sorted by name; each folder shows at most `limit` files and `truncated` counts the rest.",
       inputSchema: {
         folder: z.enum(ASSET_FOLDERS).optional().describe("Only this folder, e.g. img/characters; omit for all folders"),
@@ -228,7 +234,7 @@ export function registerAssetTools(server: McpServer, project: Project): void {
         "Show a PNG from an img/* folder as an image so you can see it, with its pixel size, file size and, for img/characters and img/faces, the sheet layout implied by the name and size. " +
         "name is the file name without .png and must match an existing file exactly (see list_assets). " +
         "The image is scaled down (nearest neighbour, aspect kept) to at most maxSize pixels on its longer edge; smaller images are shown as they are. " +
-        "Files over 32 MiB, interlaced PNGs and files that are not valid PNGs are refused. Audio cannot be previewed.",
+        "Files over 32 MiB or 16 million pixels, interlaced PNGs and files that are not valid PNGs are refused. Only names that pass the asset name rule (1-64 characters from A-Z a-z 0-9 space _ ! $ ( ) -) can be opened, even though list_assets may show files with other names. Audio cannot be previewed.",
       inputSchema: {
         folder: z.enum(IMAGE_FOLDERS).describe("Image folder, e.g. img/characters"),
         name: z.string().describe("File name without extension, e.g. Actor1"),
@@ -249,12 +255,19 @@ export function registerAssetTools(server: McpServer, project: Project): void {
             (lookalike ? ` A file whose name differs only in letter case exists (${lookalike.name}); names must match exactly.` : " Use list_assets to see the files.")
         );
       }
-      const bytes = await readImageFile(path.join(dir, wanted), `${folder}/${wanted}`, assetSizeCap(folder));
+      const label = `${folder}/${wanted}`;
+      const bytes = await readImageFile(path.join(dir, wanted), label, assetSizeCap(folder));
+      // The header is read first: a huge claimed size is refused before anything is inflated.
       let bitmap;
       try {
+        const { width, height } = pngInfo(bytes);
+        if (width * height > MAX_PREVIEW_PIXELS) {
+          throw new ProjectError(`Cannot preview ${label}: image is too large to preview (${width}x${height}); the limit is ${MAX_PREVIEW_PIXELS / 1_000_000} million pixels.`);
+        }
         bitmap = decodePng(bytes);
       } catch (err) {
-        throw new ProjectError(`Cannot preview ${folder}/${wanted}: ${err instanceof PngError ? err.message : "the image data is corrupt."}`);
+        if (err instanceof ProjectError) throw err;
+        throw new ProjectError(`Cannot preview ${label}: ${err instanceof PngError ? err.message : "the image data is corrupt."}`);
       }
       const shown = scaleDownNearest(bitmap, maxSize);
       const scaled = shown === bitmap ? "" : `; shown at ${shown.width}x${shown.height} px`;

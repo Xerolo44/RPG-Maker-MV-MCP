@@ -6,6 +6,7 @@ import {
   inspectAsset,
   isAssetFolder,
   isImageFolder,
+  isSingleCharacterSheet,
   validateAssetName,
 } from "../dist/assetFormats.js";
 import { encodePng } from "../dist/png.js";
@@ -131,4 +132,18 @@ test("inspectAsset refuses a head that is too short for a PNG header or a hostil
   assert.throws(() => inspectAsset("img/pictures", "Cut", png(2, 2).subarray(0, 20), 100), ProjectError);
   assert.throws(() => inspectAsset("img/pictures", "Cut", png(2, 2).subarray(0, 8), 100), ProjectError);
   assert.throws(() => inspectAsset("img/pictures", "../x", png(2, 2), 100), ProjectError);
+});
+
+test("isSingleCharacterSheet: a $ anywhere in the leading !/$ prefix means one character", () => {
+  for (const n of ["$Boss", "!$Chest", "$!Door", "$$x", "$"]) assert.equal(isSingleCharacterSheet(n), true, n);
+  for (const n of ["Hero", "!Door", "Door$x", "!!Door", "", "Actor$1"]) assert.equal(isSingleCharacterSheet(n), false, n);
+});
+
+test("inspectAsset: a !$ character sheet is judged as a single-character sheet", () => {
+  assert.deepEqual(inspectAsset("img/characters", "!$Chest", png(99, 128), 500).warnings, []);
+  const bad = inspectAsset("img/characters", "$!Door", png(100, 100), 500);
+  assert.equal(bad.warnings.length, 1);
+  assert.match(bad.warnings[0], /single-character/);
+  assert.equal(inspectAsset("img/characters", "!Door", png(96, 128), 500).warnings.length, 0); // 96/12, 128/8 divide
+  assert.equal(inspectAsset("img/characters", "!Door", png(100, 128), 500).warnings.length, 1);
 });

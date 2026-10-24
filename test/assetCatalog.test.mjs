@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { listAssets } from "../dist/assetCatalog.js";
@@ -342,5 +343,90 @@ test("preview_asset reports an interlaced PNG and an oversized file as errors", 
     const h = await raw("preview_asset", { folder: "img/pictures", name: "Huge" });
     assert.equal(h.isError, true);
     assert.match(h.content[0].text, /32 MiB/);
+  });
+});
+
+// ---- fix round 1 ----
+test("an unreadable folder is reported on its own entry and does not fail the other folders", async () => {
+  await withProject({}, async ({ dir, project }) => {
+    await put(dir, "img/pictures/A.png", png(1, 1));
+    await put(dir, "img/faces/F.png", png(144, 144));
+    const original = fs.readdir;
+    fs.readdir = async (p, ...rest) => {
+      if (String(p).endsWith(path.join("img", "faces"))) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      return original(p, ...rest);
+    };
+    let res;
+    try {
+      res = await listAssets(project, { includeUsage: false, limit: 10 });
+    } finally {
+      fs.readdir = original;
+    }
+    assert.equal(res.folders.length, 18);
+    const faces = folderOf(res, "img/faces");
+    assert.deepEqual([faces.total, faces.files.length], [0, 0]);
+    assert.match(faces.error, /EACCES/);
+    assert.equal(folderOf(res, "img/pictures").files[0].name, "A");
+    assert.equal("error" in folderOf(res, "img/pictures"), false);
+    assert.equal("error" in folderOf(res, "img/titles1"), false); // a missing folder is just empty
+  });
+});
+
+test("an interlaced PNG gets a warning in the listing", async () => {
+  await withProject({}, async ({ dir, project }) => {
+    const b = Buffer.from(png(2, 2));
+    b[28] = 1;
+    await put(dir, "img/pictures/Inter.png", b);
+    const e = (await listAssets(project, { folder: "img/pictures", includeUsage: false, limit: 5 })).folders[0].files[0];
+    assert.equal(e.width, 2);
+    assert.ok(e.warnings.some((w) => /nterlaced/.test(w) && /preview_asset/.test(w)));
+  });
+});
+
+test("a !$ character sheet is listed with the single-character layout", async () => {
+  await withProject({}, async ({ dir, project }) => {
+    await put(dir, "img/characters/!$Chest.png", png(99, 128));
+    const e = (await listAssets(project, { folder: "img/characters", includeUsage: false, limit: 5 })).folders[0].files[0];
+    assert.deepEqual(e.warnings, []);
+  });
+});
+
+test("preview_asset says '!$' sheets hold one character", async () => {
+  await withServer(async ({ dir, raw }) => {
+    await put(dir, "img/characters/!$Chest.png", png(99, 128));
+    const r = await raw("preview_asset", { folder: "img/characters", name: "!$Chest" });
+    assert.equal(r.isError ?? false, false);
+    assert.match(r.content[0].text, /one character/);
+    assert.match(r.content[0].text, /33x32 px/);
+  });
+});
+
+test("preview_asset refuses a header claiming more than 16 million pixels before decoding", async () => {
+  await withServer(async ({ dir, raw }) => {
+    const fake = Buffer.from(png(1, 1));
+    fake.writeUInt32BE(5000, 16);
+    fake.writeUInt32BE(5000, 20);
+    await put(dir, "img/pictures/Wide.png", fake);
+    const r = await raw("preview_asset", { folder: "img/pictures", name: "Wide" });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /too large to preview \(5000x5000\)/);
+  });
+});
+
+test("preview_asset on a PNG whose IDAT inflates far past its header fails fast", async () => {
+  await withServer(async ({ dir, raw }) => {
+    const base = Buffer.from(png(1, 1));
+    // replace the IDAT of a valid 1x1 PNG: keep signature + IHDR (33 bytes), add a 64 MB-inflating IDAT
+    const idat = zlib.deflateSync(Buffer.alloc(64 * 1024 * 1024));
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(idat.length, 0);
+    head.write("IDAT", 4, "ascii");
+    const bomb = Buffer.concat([base.subarray(0, 33), head, idat, Buffer.alloc(4), Buffer.from([0, 0, 0, 0, 73, 69, 78, 68, 0, 0, 0, 0])]);
+    await put(dir, "img/pictures/Bomb.png", bomb);
+    const started = Date.now();
+    const r = await raw("preview_asset", { folder: "img/pictures", name: "Bomb" });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /larger than its header allows/);
+    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
   });
 });
