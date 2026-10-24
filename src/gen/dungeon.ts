@@ -34,8 +34,16 @@ export function generateDungeon(opts: DungeonOptions): Layout {
     throw new GenError(`room sizes must be integers with 3 <= minRoom <= maxRoom, got minRoom ${minRoom} and maxRoom ${maxRoom}`);
   }
 
+  // Every room sits inside the map minus its 1-cell border, so each axis must fit at least one minRoom room.
+  if (width - 2 < minRoom || height - 2 < minRoom) {
+    throw new GenError(`a ${width}x${height} map cannot hold a ${minRoom}x${minRoom} room inside its border`);
+  }
+
   const rng = mulberry32(seed);
-  const randInt = (lo: number, hi: number): number => lo + Math.floor(rng() * (hi - lo + 1));
+  const randInt = (lo: number, hi: number): number => {
+    if (hi < lo) throw new GenError(`internal error: empty random range ${lo}..${hi}`);
+    return lo + Math.floor(rng() * (hi - lo + 1));
+  };
   // A leaf holds a room inset by 1 on every side, so it must be at least minRoom + 2 across.
   const minLeaf = minRoom + 2;
   const maxLeaf = 2 * maxRoom;

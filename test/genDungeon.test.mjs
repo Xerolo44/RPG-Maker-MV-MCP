@@ -94,3 +94,37 @@ test("256x256 generates in under 3000 ms", () => {
   assert.ok(layout.rooms.length > 10);
   assert.ok(elapsed < 3000, `took ${elapsed} ms`);
 });
+
+test("thin maps that cannot hold a minRoom room throw GenError", () => {
+  for (const [width, height] of [[40, 6], [6, 40], [40, 5], [5, 40], [256, 5], [5, 256]]) {
+    assert.throws(() => generateDungeon({ width, height, seed: 1 }), GenError, `${width}x${height}`);
+  }
+});
+
+test("every size from 5 to 40 either throws GenError or yields a valid layout", () => {
+  for (const seed of [1, 2, 3]) {
+    for (let width = 5; width <= 40; width++) {
+      for (let height = 5; height <= 40; height++) {
+        const label = `${width}x${height} seed ${seed}`;
+        let layout;
+        try {
+          layout = generateDungeon({ width, height, seed });
+        } catch (e) {
+          assert.ok(e instanceof GenError, `${label}: ${e}`);
+          continue;
+        }
+        for (let x = 0; x < width; x++) assert.ok(!layout.floor[x] && !layout.floor[(height - 1) * width + x], `${label}: border`);
+        for (let y = 0; y < height; y++) assert.ok(!layout.floor[y * width] && !layout.floor[y * width + width - 1], `${label}: border`);
+        assert.ok(layout.rooms.length >= 2, label);
+        for (const r of layout.rooms) {
+          assert.ok(r.x >= 1 && r.y >= 1 && r.x + r.width <= width - 1 && r.y + r.height <= height - 1, `${label}: room out of bounds`);
+          assert.ok(r.width >= 5 && r.height >= 5, `${label}: undersized room`);
+          for (let y = r.y; y < r.y + r.height; y++) {
+            for (let x = r.x; x < r.x + r.width; x++) assert.equal(layout.floor[y * width + x], 1, `${label}: room cell not floor`);
+          }
+        }
+        assert.ok(isFullyConnected(layout), `${label}: not connected`);
+      }
+    }
+  }
+});
