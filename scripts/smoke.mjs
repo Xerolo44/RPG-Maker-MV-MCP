@@ -238,6 +238,9 @@ if (!validation.includes('"errors": []')) { console.log("FAIL validation should 
 // asset audit: Actor1 face/character are referenced but absent; Test_A2 tileset exists
 await call("audit_assets", {}, (t) => t.includes("Actor1"));
 
+// lint: the 201 to map 99 added above targets a map that does not exist
+await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
+
 // map preview as PNG
 {
   const r = await client.callTool({ name: "render_map_image", arguments: { mapId: 1, tileSize: 16, showGrid: true } });
