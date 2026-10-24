@@ -66,6 +66,22 @@ scripts/
 - Keep tool descriptions written for an AI client: state parameter semantics and
   RPG Maker quirks (scopes, command codes, chance values) in the description.
 
+## Releasing
+
+Releases are automatic. To ship a new version, include these in a PR to `main`:
+
+1. Bump `version` in `package.json`, and both `version` fields in `server.json`.
+2. Add a `## [X.Y.Z] - date` section to `CHANGELOG.md` (it becomes the GitHub Release notes).
+
+When the PR is merged, `.github/workflows/release.yml` sees a version without a GitHub Release,
+runs the tests, publishes to npm (with provenance) and the MCP Registry, then tags `vX.Y.Z` and
+creates the GitHub Release. Merges that don't change the version release nothing. If a run fails
+part-way, re-run it: finished steps are skipped. `node scripts/release-check.mjs <file>` runs the
+version consistency check locally.
+
+One-time setup: configure npm trusted publishing for this repository and the workflow
+`release.yml` (npmjs.com, package settings). No secrets are needed.
+
 ## Reporting issues
 
 Please include: your OS, Node version, the tool call (name + arguments), the
