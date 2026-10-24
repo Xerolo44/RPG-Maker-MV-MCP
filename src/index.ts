@@ -16,6 +16,7 @@ import { registerPlaytestTools } from "./tools/playtestTools.js";
 import { registerSkillTools } from "./tools/skillTools.js";
 import { registerSearchTools } from "./tools/searchTools.js";
 import { registerMaintenanceTools } from "./tools/maintenanceTools.js";
+import { registerChangesetTools } from "./tools/changesetTools.js";
 import { registerConnectTools } from "./tools/connectTools.js";
 import { registerBalanceTools } from "./tools/balanceTools.js";
 import { registerLocalizationTools } from "./tools/localizationTools.js";
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
   if (enabled.has("database")) registerSkillTools(server, project);
   if (enabled.has("search")) registerSearchTools(server, project);
   if (enabled.has("maintenance")) registerMaintenanceTools(server, project);
+  if (enabled.has("maintenance")) registerChangesetTools(server, project);
   if (enabled.has("connect")) registerConnectTools(server, project);
   if (enabled.has("balance")) registerBalanceTools(server, project);
   if (enabled.has("localization")) registerLocalizationTools(server, project);

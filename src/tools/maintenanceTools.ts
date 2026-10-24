@@ -35,7 +35,7 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
     {
       title: "Restore backup",
       description:
-        "Restore project files from a backup session (see list_backups). Restores one file (project-relative path like 'data/Actors.json') or, with no file given, every file in the session. The current state is itself backed up first, so a restore can be undone.",
+        "Restore project files from a backup session (see list_backups). Restores one file (project-relative path like 'data/Actors.json') or, with no file given, every file in the session. The current state is itself backed up first, so a restore can be undone. Refused while a changeset is open (commit or discard it first). The RPG Maker editor must stay closed while files are restored.",
       inputSchema: {
         session: z
           .string()
@@ -48,6 +48,11 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
       },
     },
     safe(async ({ session, file }) => {
+      if (project.changesetActive) {
+        throw new ProjectError(
+          "restore_backup writes straight to disk, which would bypass the open changeset. Call commit_changeset or discard_changeset first."
+        );
+      }
       const sessions = await project.listBackupSessions();
       if (sessions.length === 0) throw new ProjectError("No backup sessions exist.");
       const chosen = session ? sessions.find((s) => s.session === session) : sessions[0];
@@ -144,9 +149,7 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
         const known = infos.filter((m): m is { id: number; name: string } => m != null);
         mapIds = known.map((m) => m.id);
         for (const info of known) {
-          try {
-            await fs.access(project.mapFile(info.id));
-          } catch {
+          if (!(await project.exists(project.mapFile(info.id)))) {
             errors.push(`MapInfos lists map ${info.id} ('${info.name}') but ${path.basename(project.mapFile(info.id))} is missing.`);
           }
         }
@@ -205,9 +208,7 @@ export function registerMaintenanceTools(server: McpServer, project: Project): v
         checked.plugins = plugins.length;
         for (const plugin of plugins) {
           const file = path.join(project.root, "js", "plugins", `${plugin.name}.js`);
-          try {
-            await fs.access(file);
-          } catch {
+          if (!(await project.exists(file))) {
             const msg = `Plugin '${plugin.name}' is registered but js/plugins/${plugin.name}.js is missing.`;
             if (plugin.status) errors.push(msg + " (enabled — the game will fail to load)");
             else warnings.push(msg + " (disabled)");
