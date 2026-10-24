@@ -97,14 +97,18 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         "Supported commands: Show Text (101/401), Show Choices (102/402/403/404), Conditional Branch (111/411/412: switch, variable, self switch, gold, item), " +
         "Loop/Break (112/113/413), Exit Event Processing (115), Common Event (117, nested up to 8 deep), comments, Control Switches (121), Control Variables (122: constant, variable and random operands), " +
         "Control Self Switch (123), Change Gold (125), Change Items (126), Transfer Player (201, ends the run) and Plugin Command (356, listed in changes as 'plugin: ...'). " +
-        "Everything else (script 355, audio, pictures, movement, waits, labels, other condition types, game-data operands) is listed in unsupported with its index and skipped; " +
+        "Battle Processing (301) is not fought: the branch picked by battleResult runs (win, escape or lose; default win) and the others are skipped; a missing branch adds 'battle: no <result> branch' to changes. " +
+        "Label (118) and Jump to Label (119) work: a jump goes to the first label of that name in the current command list and counts as a step, so a label loop ends 'stepLimit'; a missing label is listed in unsupported and the run continues. " +
+        "Presentation commands (Set Movement Route 205, animation and balloon 212/213, screen fades, tint, flash and shake 221-225, wait 230, show/erase picture 231/235, weather 236, audio 241-251, 505 route rows) are ignored and only counted in cosmetic, not listed in unsupported; " +
+        "the one exception is the switch ON/OFF steps of a Set Movement Route, which do change the simulated switches (changes: 'switch N → ON (move route)'). " +
+        "Everything else (script 355, other condition types, game-data operands, party and scene commands, ...) is listed in unsupported with its index and skipped; " +
         "an unsupported condition follows unknownCondition: stop (default) ends the run with ended 'unsupported', then/else takes that branch. " +
         "Message text is returned verbatim, control codes unexpanded. Limits: 10000 steps (ended 'stepLimit'), integer variable math (results are floored like the engine, so -7 / 2 gives -4; division or modulo by zero leaves the variable unchanged; a random or variable operand is evaluated once per command). A command that changes several switches or variables adds one changes entry for the whole range. messages, changes and unsupported are each capped at 2000 entries; omitted counts what was dropped (present only then) and finalState stays exact. " +
         "State inputs default to everything OFF/0/empty: switches and variables are keyed by id, selfSwitches by letter A to D, items by item id. " +
         "choices lists the answers to Show Choices in the order they are asked (0-based; a missing answer is 0, an out-of-range one takes the cancel branch). " +
         "page is a 0-based page index; when omitted the highest page whose conditions hold under the supplied state is used (the actor condition counts as met). " +
         "The random operand is seeded (default seed 0), so runs repeat exactly. " +
-        "Returns {messages, changes, transfers, unsupported, ended, finalState, pageUsed}.",
+        "Returns {messages, changes, transfers, unsupported, cosmetic, ended, finalState, pageUsed}.",
       inputSchema: {
         mapId: z.number().int().positive().describe("Map id."),
         eventId: z.number().int().positive().describe("Event id on that map."),
@@ -116,10 +120,11 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         items: z.record(z.string().regex(/^[1-9]\d*$/, "item ids must be positive integers"), z.number().int().min(0)).optional().describe('Items held by id, e.g. {"4": 1}.'),
         choices: z.array(z.number().int().min(0)).max(50).optional().describe("Answers to Show Choices, in the order they are asked."),
         seed: z.number().int().optional().describe("Seed for the random operand (default 0)."),
+        battleResult: z.enum(["win", "escape", "lose"]).optional().describe("How every Battle Processing command ends, which decides the branch that runs (default win)."),
         unknownCondition: z.enum(["then", "else", "stop"]).default("stop").describe("What to do at a condition that cannot be simulated."),
       },
     },
-    safe(async ({ mapId, eventId, page, switches, variables, selfSwitches, gold, items, choices, seed, unknownCondition }) => {
+    safe(async ({ mapId, eventId, page, switches, variables, selfSwitches, gold, items, choices, seed, unknownCondition, battleResult }) => {
       void project.root; // throws the standard "No project selected" error first
       const mapFile = project.mapFile(mapId);
       if (!(await project.exists(mapFile))) throw new ProjectError(`map ${mapId} does not exist. Use list_maps to see the map ids.`);
@@ -162,6 +167,7 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         choices,
         seed,
         unknownCondition,
+        battleResult,
         mapId,
         eventId,
         commonEvents: (id) => {

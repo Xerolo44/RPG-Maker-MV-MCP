@@ -291,8 +291,11 @@ Checks that need no running game:
   (switches, variables, self switches, gold, items, answers to choices) and returns the messages
   shown, the changes made, the transfer it ends in and the commands it could not simulate. It
   covers messages, choices, conditions, loops, common events, switch/variable/self switch/gold/item
-  changes, transfers and plugin commands; scripts, audio, pictures, movement and so on are listed
-  as unsupported and skipped. It never touches the project.
+  changes, transfers, plugin commands, labels and jumps; battles run the branch chosen by
+  `battleResult` (`win`, `escape` or `lose`, default win); fades, waits, audio, pictures,
+  animations and move routes are ignored and only counted in `cosmetic` (the switch ON/OFF steps
+  of a move route still apply); scripts and other commands are listed as unsupported and skipped.
+  It never touches the project.
 - `editor_status` — reports whether the RPG Maker editor process appears to be running (Windows
   only; `null` elsewhere) and which files this server wrote have since been modified by something
   else, usually the editor saving over them. It only reports.

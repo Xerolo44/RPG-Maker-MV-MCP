@@ -6,7 +6,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { compileDialogue } from "../dist/dialogueTree.js";
 import { simulateEvent } from "../dist/eventSim.js";
+import { buildTemplate, templateParamsSchema } from "../dist/eventTemplates.js";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -526,3 +528,229 @@ test("simulate_event reports unknown map, event and page, and rejects bad ids", 
     }
   });
 });
+
+// ---- cutscene and battle commands ----
+
+const COSMETIC_CODES = [205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505];
+const withEnd = (list) => [...list, END];
+
+test("a compiled cutscene simulates with nothing unsupported, counts the presentation commands and keeps the message", () => {
+  const list = withEnd(compileDialogue([
+    { fade: "out" },
+    { wait: 30 },
+    { showPicture: { id: 1, name: "Sunrise", x: 0, y: 0 } },
+    { playAudio: { kind: "bgm", name: "Theme1" } },
+    { moveRoute: { target: "player", steps: ["up", "up", { wait: 10 }, "turnLeft"] } },
+    { fade: "in" },
+    { say: "The morning came." },
+  ]));
+  const presentation = list.filter((cmd) => COSMETIC_CODES.includes(cmd.code)).length;
+  const t = sim(list);
+  assert.deepEqual(t.unsupported, []);
+  assert.deepEqual(t.messages, ["The morning came."]);
+  assert.equal(t.ended, "end");
+  assert.equal(t.cosmetic, presentation);
+  assert.equal(t.cosmetic, 1 + 1 + 1 + 1 + 1 + 4 + 1); // fade, wait, picture, bgm, 205 + 4 rows, fade
+  assert.deepEqual(t.changes, []);
+});
+
+test("every cosmetic code is ignored and counted, none is listed as unsupported", () => {
+  for (const code of COSMETIC_CODES) {
+    const t = sim([c(code, 0, 1, 2, 3), END]);
+    assert.deepEqual(t.unsupported, [], `code ${code}`);
+    assert.equal(t.cosmetic, 1, `code ${code}`);
+  }
+  assert.equal(sim([END]).cosmetic, 0);
+  // Commands skipped by a block are not counted.
+  assert.equal(sim([c(111, 0, 0, 1, 0), c(221, 1), c(0, 1), c(412, 0), END]).cosmetic, 0);
+});
+
+test("the inn template simulates with the fades and wait cosmetic and only recover-all (314) unsupported", () => {
+  const { pages } = buildTemplate(templateParamsSchema.parse({ template: "inn", price: 50, greeting: "Welcome!" }));
+  const t = sim(pages[0].list, { choices: [0] }, freshState({ gold: 100 }));
+  assert.deepEqual(t.unsupported.map((u) => u.code), [314]);
+  assert.equal(t.cosmetic, 3); // 221, 230, 222
+  assert.equal(t.finalState.gold, 50);
+});
+
+test("Set Movement Route applies switch ON and OFF route commands in order and stays cosmetic otherwise", () => {
+  const step = (code, ...parameters) => ({ code, parameters, indent: null });
+  const route = (...list) => c(205, 0, -1, { list: [...list, { code: 0, parameters: [] }], repeat: false, skippable: false, wait: true });
+  const t = sim(withEnd([route(step(1), step(27, 4), step(28, 5), step(27, 6), step(28, 6))]), {}, freshState({ switches: { 5: true } }));
+  assert.deepEqual(t.unsupported, []);
+  assert.equal(t.cosmetic, 1);
+  assert.deepEqual(t.changes, ["switch 4 → ON (move route)", "switch 5 → OFF (move route)", "switch 6 → ON (move route)", "switch 6 → OFF (move route)"]);
+  assert.equal(t.finalState.switches[4], true);
+  assert.equal(t.finalState.switches[5], false);
+  assert.equal(t.finalState.switches[6], false);
+});
+
+test("a compiled move route with switchOn changes the simulated switches", () => {
+  const t = sim(withEnd(compileDialogue([{ moveRoute: { target: "this", steps: [{ switchOn: 9 }, "down"] } }])));
+  assert.equal(t.finalState.switches[9], true);
+  assert.deepEqual(t.changes, ["switch 9 → ON (move route)"]);
+  assert.equal(t.cosmetic, 3); // 205 + two 505 rows
+});
+
+test("malformed Set Movement Route parameters never throw and count as cosmetic", () => {
+  const bad = [
+    c(205, 0),
+    c(205, 0, -1),
+    c(205, 0, -1, null),
+    c(205, 0, -1, "route"),
+    c(205, 0, -1, {}),
+    c(205, 0, -1, { list: "x" }),
+    c(205, 0, -1, { list: [null, 5, { code: 27 }, { code: 27, parameters: [] }, { code: 27, parameters: ["a"] }, { code: 27, parameters: [0] }, { code: 28, parameters: [1.5] }] }),
+    END,
+  ];
+  let t;
+  assert.doesNotThrow(() => { t = sim(bad); });
+  assert.equal(t.cosmetic, 7);
+  assert.deepEqual(t.unsupported, []);
+  assert.deepEqual(t.changes, []);
+  assert.deepEqual(t.finalState.switches, {});
+  assert.equal(t.ended, "end");
+});
+
+// A battle whose branches set variable 1 to 1 (win), 2 (escape) or 3 (lose).
+const battleList = (tree) => withEnd(compileDialogue(tree));
+const fullBattle = battleList([
+  { battle: { troopId: 3, canEscape: true, canLose: true,
+    onWin: [{ setVariable: { id: 1, op: "set", value: 1 } }, { say: "won" }],
+    onEscape: [{ setVariable: { id: 1, op: "set", value: 2 } }],
+    onLose: [{ setVariable: { id: 1, op: "set", value: 3 } }] } },
+  { say: "after" },
+]);
+
+test("Battle Processing runs the branch that matches battleResult, then continues after the block", () => {
+  for (const [result, expected] of [["win", 1], ["escape", 2], ["lose", 3]]) {
+    const t = sim(fullBattle, { battleResult: result });
+    assert.equal(t.finalState.variables[1], expected, result);
+    assert.equal(t.messages.at(-1), "after", result);
+    assert.deepEqual(t.unsupported, [], result);
+    assert.equal(t.ended, "end", result);
+  }
+  assert.deepEqual(sim(fullBattle, { battleResult: "win" }).messages, ["won", "after"]);
+  assert.deepEqual(sim(fullBattle, { battleResult: "lose" }).messages, ["after"]);
+});
+
+test("Battle Processing defaults to a win", () => {
+  assert.equal(sim(fullBattle).finalState.variables[1], 1);
+  assert.equal(sim(fullBattle, { battleResult: undefined }).finalState.variables[1], 1);
+});
+
+test("a battle without the chosen branch is skipped with a note in changes", () => {
+  const onlyWin = battleList([
+    { battle: { troopId: 1, onWin: [{ setVariable: { id: 1, op: "set", value: 1 } }] } },
+    { say: "after" },
+  ]);
+  let t = sim(onlyWin, { battleResult: "lose" });
+  assert.deepEqual(t.changes, ["battle: no lose branch"]);
+  assert.equal(t.finalState.variables[1], undefined);
+  assert.deepEqual(t.messages, ["after"]);
+  t = sim(onlyWin, { battleResult: "escape" });
+  assert.deepEqual(t.changes, ["battle: no escape branch"]);
+  const bare = sim(battleList([{ battle: { troopId: 1 } }, { say: "after" }]));
+  assert.deepEqual(bare.changes, ["battle: no win branch"]);
+  assert.deepEqual(bare.messages, ["after"]);
+  assert.deepEqual(bare.unsupported, []);
+});
+
+test("a battle branch can contain choices and an exit; nesting indents are respected", () => {
+  const list = battleList([
+    { battle: { troopId: 1, canLose: true,
+      onWin: [{ choices: [{ label: "A", then: [{ setVariable: { id: 2, op: "set", value: 10 } }] }, { label: "B" }] }],
+      onLose: [{ say: "dead" }, { exit: true }] } },
+    { say: "after" },
+  ]);
+  let t = sim(list, { battleResult: "win" });
+  assert.equal(t.finalState.variables[2], 10);
+  assert.deepEqual(t.messages, ["after"]);
+  t = sim(list, { battleResult: "lose" });
+  assert.deepEqual(t.messages, ["dead"]);
+  assert.equal(t.ended, "exit");
+});
+
+test("Label / Jump to Label: 118 is a no-op, 119 jumps forward and backward", () => {
+  const forward = sim(withEnd([c(119, 0, "skip"), c(401, 0, "never"), c(118, 0, "skip"), c(401, 0, "landed")]));
+  assert.deepEqual(forward.messages, ["landed"]);
+  assert.deepEqual(forward.unsupported, []);
+
+  const backward = sim(withEnd([
+    c(118, 0, "top"),
+    c(122, 0, 1, 1, 1, 0, 1), // variable 1 += 1
+    c(111, 0, 1, 1, 0, 3, 4), // if variable 1 < 3
+    c(119, 1, "top"),
+    c(0, 1),
+    c(412, 0),
+    c(401, 0, "done"),
+  ]));
+  assert.equal(backward.finalState.variables[1], 3);
+  assert.deepEqual(backward.messages, ["done"]);
+  assert.equal(backward.ended, "end");
+});
+
+test("119 finds the first label with that name anywhere in the list, even inside a block", () => {
+  const t = sim(withEnd([
+    c(119, 0, "in"),
+    c(401, 0, "never"),
+    c(111, 0, 0, 1, 0),
+    c(118, 1, "in"),
+    c(401, 1, "inside"),
+    c(0, 1),
+    c(412, 0),
+    c(401, 0, "tail"),
+  ]), {}, freshState({ switches: { 1: false } }));
+  assert.deepEqual(t.messages, ["inside", "tail"]);
+});
+
+test("a label loop ends in stepLimit and does not throw", () => {
+  let t;
+  assert.doesNotThrow(() => { t = sim(withEnd([c(118, 0, "x"), c(119, 0, "x")])); });
+  assert.equal(t.ended, "stepLimit");
+});
+
+test("Jump to Label with a missing or malformed label is reported and execution continues", () => {
+  const t = sim(withEnd([c(119, 0, "nowhere"), c(401, 0, "next"), c(119, 0), c(401, 0, "last")]));
+  assert.deepEqual(t.messages, ["next", "last"]);
+  assert.deepEqual(t.unsupported.map((u) => [u.index, u.code]), [[0, 119], [2, 119]]);
+  assert.match(t.unsupported[0].message, /nowhere/);
+  assert.equal(t.ended, "end");
+});
+
+test("a label is only looked up in the current command list, not in the caller's", () => {
+  const ce = withEnd([c(119, 0, "a"), c(401, 0, "from ce")]);
+  const t = sim(withEnd([c(118, 0, "a"), c(117, 0, 1), c(401, 0, "back")]), { commonEvents: (id) => (id === 1 ? ce : null) });
+  assert.deepEqual(t.messages, ["from ce", "back"]);
+  assert.equal(t.unsupported.length, 1);
+  assert.equal(t.unsupported[0].code, 119);
+});
+
+test("simulate_event battleResult selects the branch and the trace carries cosmetic", async () => {
+  const data = simData();
+  data["Map001.json"].events[1].pages[0].list = [...fullBattle.slice(0, -1), c(221, 0), END];
+  await withProject(data, async (dir) => {
+    const client = await connect(["--project", dir]);
+    try {
+      const run = async (args) => {
+        const res = await client.callTool({ name: "simulate_event", arguments: { mapId: 1, eventId: 1, page: 0, ...args } });
+        assert.notEqual(res.isError, true, text(res));
+        return JSON.parse(text(res));
+      };
+      assert.equal((await run({})).finalState.variables["1"], 1);
+      for (const [result, expected] of [["win", 1], ["escape", 2], ["lose", 3]]) {
+        const r = await run({ battleResult: result });
+        assert.equal(r.finalState.variables["1"], expected, result);
+        assert.equal(r.cosmetic, 1);
+      }
+      const bad = await client.callTool({ name: "simulate_event", arguments: { mapId: 1, eventId: 1, battleResult: "draw" } });
+      assert.equal(bad.isError, true);
+      const tool = (await client.listTools()).tools.find((t) => t.name === "simulate_event");
+      assert.match(tool.description, /battleResult/);
+      assert.match(tool.description, /cosmetic/);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
