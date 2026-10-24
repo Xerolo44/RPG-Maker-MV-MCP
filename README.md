@@ -138,7 +138,7 @@ terminal window before adding the connector, and leave that window open.
 | Skill helpers | `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill` |
 | Search | `search_records`, `search_map_events` |
 | Maps & events | `list_maps`, `get_map`, `create_map`, `update_map`, `get_event`, `update_event`, `create_event`, `delete_event`, `add_event_command`, `add_dialogue`, `event_command_reference` |
-| Tilesets & painting | `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map`, `render_map_image` |
+| Tilesets & painting | `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map`, `render_map_image`, `render_diff` |
 | Map connections | `connect_maps`, `list_map_connections` |
 | Bulk & balancing | `bulk_update_records`, `generate_param_curve`, `generate_enemy_scaling`, `balance_report`, `simulate_battle` |
 | Localization | `export_texts`, `import_texts` |

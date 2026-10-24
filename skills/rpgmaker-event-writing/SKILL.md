@@ -9,6 +9,8 @@ An event has `pages`; each page has `conditions`, an `image`, a `trigger` and a 
 
 ## Fast paths
 - **Dialogue:** `add_dialogue {mapId, eventId, lines, faceName?, position?}` builds the 101/401 commands and starts a new message box every 4 lines (the window shows 4 lines).
+- **Common patterns (preferred):** `create_event_from_template {mapId, x, y, template, ...}` builds a finished chest, locked door, inn, shop, save point or NPC in one write; it refuses an occupied tile unless `allowStack` is true. Events are invisible until you give them an image.
+- **Branching conversations (preferred):** `build_dialogue_tree {tree, mapId?, eventId?}` compiles nested say / choices / if / set-switch / set-variable / transfer nodes into correctly indented commands. Call it without `mapId`/`eventId` (or with `dryRun`) to preview first. Use these two before hand-writing `add_event_command` lists; the hand-built indent and terminator bookkeeping is where most event bugs come from.
 - **Anything else:** `add_event_command` with a `commands` array; it inserts before the terminator, or at `index`.
 - **New NPC:** `create_event {mapId, name, x, y}` then `add_dialogue`. Give it a sprite by passing a page with `image: {characterName, characterIndex, direction, pattern: 1}` (look at an existing event with `get_event` for the full page shape).
 

@@ -274,6 +274,16 @@ await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
 }
 await expectError("render_map_image outside the map errors", "render_map_image", { mapId: 1, x: 50 }, "outside");
 
+// render_diff: map 1 was painted this session, map 3 was created this session (no earlier version)
+{
+  const r = await client.callTool({ name: "render_diff", arguments: { mapId: 1, tileSize: 16 } });
+  const png = r.content?.find((c) => c.type === "image");
+  const ok = !r.isError && !!png && png.mimeType === "image/png" && r.content[0].text.includes("changed");
+  console.log(`${ok ? "PASS" : "FAIL"} render_diff reports changed cells and returns a PNG`);
+  if (!ok) { failures++; console.log("    ", r.content?.[0]?.text?.slice(0, 300)); }
+}
+await call("render_diff", { mapId: 3 }, (t) => t.includes("no earlier version"));
+
 // map connector
 await call("connect_maps", {
   a: { mapId: 1, door: { x: 8, y: 8 }, spawn: { x: 8, y: 7, direction: 8 } },

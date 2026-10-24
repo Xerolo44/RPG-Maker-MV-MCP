@@ -34,6 +34,9 @@ Erasing needs an explicit layer: `{tile: 0, layer: 2, ...}`.
 - Vary the ground: a second A2 kind in patches looks much better than one flat fill.
 - Keep doors and exits 1 tile wide and mark them clearly.
 
+## Reviewing your changes
+After bulk painting or generation, run `render_diff {mapId}`: it compares the map with the backup taken before this session's first edit (or `against: {session}` / `{changeset}`) and returns a PNG of the current map with changed cells outlined yellow and added or moved events outlined green, plus a text list of the first 30 changed cells and event ids. Check that only the area you meant to touch is outlined.
+
 ## Connecting maps
 Use `connect_maps` instead of hand-writing Transfer Player events:
 - `a` and `b` each give `mapId`, the `door` tile (where the exit event sits) and optionally the `spawn` tile and facing direction for arriving players. Put `spawn` on the walkable tile in front of the door when the door itself is in a wall.
