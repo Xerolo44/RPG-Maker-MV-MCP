@@ -9,7 +9,7 @@ description: How to build RPG Maker MV maps with the rpgmaker-mv MCP server - ch
 1. `create_map` with a size and `tilesetId`; pass `fill` (e.g. `{sheet: "A2", kind: 16}`) so layer 0 is not empty.
 2. `get_tileset_info {tilesetId}` for the overview, then `get_tileset_info {tilesetId, sheet: "A2"}` for kinds and passability. `get_tileset_image` shows the sheet so you can pick by looks.
 3. `paint_tiles` with a list of operations (`cells`, `rect`, `fill`). Autotile edges and corners are computed for you - paint plain rectangles and let the shapes resolve.
-4. **`render_map_image` after every few operations.** It draws the real graphics, event sprites and numbered markers. Use `x/y/width/height` to zoom and `showGrid` to read coordinates and `showPassability` to tint blocked cells red.
+4. **`render_map_image` after every few operations.** It draws the real graphics, event sprites and numbered markers. Use `x/y/width/height` to zoom and `showGrid` to read coordinates and `showPassability` to tint cells red that are blocked in at least one direction.
 5. Fix what looks wrong and repeat. `render_map` (text) is the cheap alternative when you only need exact tile ids.
 
 ## Layers

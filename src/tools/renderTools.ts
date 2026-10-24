@@ -221,7 +221,7 @@ export function registerRenderTools(server: McpServer, project: Project): void {
     {
       title: "Render map as image",
       description:
-        "Render a map to a PNG image so you can SEE what it looks like: all tile layers with correct autotile shapes, shadows and tiles that draw above characters, optionally the events' character sprites, coloured event markers with their ids, region ids, a tile grid and a passability overlay (red = blocked in all directions). " +
+        "Render a map to a PNG image so you can SEE what it looks like: all tile layers with correct autotile shapes, shadows and tiles that draw above characters, optionally the events' character sprites, coloured event markers with their ids, region ids, a tile grid and a passability overlay (red = blocked in at least one direction). " +
         "This is the visual counterpart of render_map (text) - use it after paint_tiles / create_event / connect_maps to check your work. " +
         "Marker colours: blue = event with a Transfer Player command (door/exit), orange = shows text, magenta = autorun/parallel, green = anything else. " +
         "Needs the tileset images in img/tilesets (sheets without an image are drawn as flat colours and listed). Large maps are shrunk to fit ~1600px; pass x/y/width/height to zoom into a region and raise tileSize for detail.",
@@ -238,7 +238,7 @@ export function registerRenderTools(server: McpServer, project: Project): void {
           .describe("Draw event character sprites, coloured id markers, both, or neither"),
         showGrid: z.boolean().default(false).describe("Overlay a tile grid"),
         showRegions: z.boolean().default(false).describe("Overlay region ids (layer 5)"),
-        showPassability: z.boolean().default(false).describe("Tint blocked cells translucent red (not walkable in any direction by the tileset flags)"),
+        showPassability: z.boolean().default(false).describe("Tint blocked cells translucent red (blocked in at least one direction by the tileset flags)"),
       },
     },
     safe(async ({ mapId, x, y, width, height, tileSize, showEvents, showGrid, showRegions, showPassability }) => {
@@ -297,6 +297,10 @@ export function registerRenderTools(server: McpServer, project: Project): void {
         const session = plainFolderName("session", against.session);
         oldFile = path.join(project.backupRoot, session, rel);
         label = `session ${session}`;
+      } else if (project.changesetActive && project.isStaged(project.mapFile(mapId))) {
+        // Session backups are deferred until commit, so the pre-changeset state is the file on disk.
+        oldFile = project.mapFile(mapId);
+        label = "the file on disk (before the open changeset)";
       } else {
         const found = (await project.listBackupSessions()).find((s) => s.files.includes(rel));
         if (found) {
@@ -317,7 +321,14 @@ export function registerRenderTools(server: McpServer, project: Project): void {
       } catch {
         return none(`${label}: ${rel} is missing or unreadable there`);
       }
-      if (!before || !Array.isArray(before.data) || !(before.width > 0) || !(before.height > 0)) {
+      if (
+        !before ||
+        !(before.width > 0) ||
+        !(before.height > 0) ||
+        !Array.isArray(before.data) ||
+        before.data.length !== before.width * before.height * LAYER_COUNT ||
+        !Array.isArray(before.events)
+      ) {
         return none(`${label}: ${rel} there is not a valid map`);
       }
 

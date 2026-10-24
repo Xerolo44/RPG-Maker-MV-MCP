@@ -278,7 +278,7 @@ await expectError("render_map_image outside the map errors", "render_map_image",
 {
   const r = await client.callTool({ name: "render_diff", arguments: { mapId: 1, tileSize: 16 } });
   const png = r.content?.find((c) => c.type === "image");
-  const ok = !r.isError && !!png && png.mimeType === "image/png" && r.content[0].text.includes("changed");
+  const ok = !r.isError && !!png && png.mimeType === "image/png" && /(^|\s)[1-9]\d* changed cell/.test(r.content[0].text);
   console.log(`${ok ? "PASS" : "FAIL"} render_diff reports changed cells and returns a PNG`);
   if (!ok) { failures++; console.log("    ", r.content?.[0]?.text?.slice(0, 300)); }
 }

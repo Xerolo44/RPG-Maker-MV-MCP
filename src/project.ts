@@ -279,6 +279,11 @@ export class Project {
     await this.recordWrite(filePath);
   }
 
+  /** True if the open changeset holds staged (not yet committed) content for this file. */
+  isStaged(filePath: string): boolean {
+    return this.changeset?.staged.has(path.resolve(filePath)) ?? false;
+  }
+
   get changesetActive(): boolean {
     return this.changeset !== null;
   }
