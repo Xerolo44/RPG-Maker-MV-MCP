@@ -80,6 +80,18 @@ test("--tools maintenance serves the changeset tools and editor_status", async (
   });
 });
 
+test("GROUPS includes assets and parseProfile('assets') enables it with project", () => {
+  assert.ok(GROUPS.includes("assets"));
+  assert.deepEqual([...parseProfile("assets")].sort(), ["assets", "project"]);
+});
+
+test("--tools assets adds exactly the asset tools to the project tools", async () => {
+  const projectOnly = await withServer(["--tools", "project"], {}, toolNames);
+  const withAssets = await withServer(["--tools", "assets"], {}, toolNames);
+  assert.deepEqual(withAssets.filter((n) => !projectOnly.includes(n)).sort(), ["import_asset"]);
+  assert.ok(projectOnly.every((n) => withAssets.includes(n)));
+});
+
 test("RPGMV_TOOLS env applies and --tools wins over it", async () => {
   await withServer([], { RPGMV_TOOLS: "maps" }, async (client) => {
     const names = await toolNames(client);

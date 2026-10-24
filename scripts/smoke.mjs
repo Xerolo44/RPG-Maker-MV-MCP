@@ -260,6 +260,16 @@ if (!validation.includes('"errors": []')) { console.log("FAIL validation should 
 // asset audit: Actor1 face/character are referenced but absent; Test_A2 tileset exists
 await call("audit_assets", {}, (t) => t.includes("Actor1"));
 
+// asset import: a tiny PNG from outside the project lands in img/pictures
+{
+  const srcDir = await fs.mkdtemp(path.join(os.tmpdir(), "mv-mcp-smoke-src-"));
+  const src = path.join(srcDir, "SmokePic.png");
+  await fs.writeFile(src, tinyPng);
+  await call("import_asset", { source: src, folder: "img/pictures" },
+    (t) => t.includes('"imported"') && t.includes("img/pictures/SmokePic.png"));
+  await fs.rm(srcDir, { recursive: true, force: true });
+}
+
 // lint: the 201 to map 99 added above targets a map that does not exist
 await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
 

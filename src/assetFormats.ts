@@ -1,6 +1,7 @@
 // Pure checks for importing assets: folder set, name rules, magic-byte type detection and
 // advisory size/dimension warnings. Works on a file's first bytes only; nothing is decoded
 // and nothing here touches the disk.
+import path from "node:path";
 import { pngInfo } from "./png.js";
 import { ProjectError } from "./project.js";
 
@@ -37,6 +38,45 @@ export function isImageFolder(f: AssetFolder): boolean {
 
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 128 * 1024 * 1024;
+
+/** Largest file `folder` accepts, in bytes (32 MiB for images, 128 MiB for audio). */
+export function assetSizeCap(folder: AssetFolder): number {
+  return isImageFolder(folder) ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
+}
+
+const MAX_SOURCE_PATH = 4096;
+
+/**
+ * String-level checks on a caller-named source file path, run before any file access. Accepts
+ * only an absolute local path: on Windows `X:\…` (or `X:/…`), elsewhere `/…`. Refuses on every
+ * platform UNC (`\\server\share`, `//server/share`) and device (`\\.\`, `\\?\`) prefixes,
+ * control characters and absurd lengths; on Windows also drive-relative (`C:x`) and root-relative
+ * (`\x`) paths, alternate data streams (`file:stream`) and reserved device file names (`NUL`,
+ * `con.png`). Returns the normalised path or throws `ProjectError`.
+ */
+export function checkSourcePath(source: string, platform: string = process.platform): string {
+  if (typeof source !== "string" || source.length === 0) throw new ProjectError("source must be a non-empty file path.");
+  if (source.length > MAX_SOURCE_PATH) throw new ProjectError(`source is longer than ${MAX_SOURCE_PATH} characters.`);
+  if (/[\u0000-\u001f\u007f]/.test(source)) throw new ProjectError("source contains control characters.");
+  if (/^[\\/]{2}[.?][\\/]/.test(source)) {
+    throw new ProjectError("Device paths (\\\\.\\… or \\\\?\\…) are not accepted as source; name a regular file on a local drive.");
+  }
+  if (/^[\\/]{2}/.test(source)) {
+    throw new ProjectError("UNC network paths (\\\\server\\share\\…) are not accepted as source; copy the file to a local drive first.");
+  }
+  const relative = () =>
+    new ProjectError(`source must be an absolute local file path (${platform === "win32" ? "like C:\\art\\Hero.png" : "like /home/me/art/Hero.png"}).`);
+  if (platform === "win32") {
+    if (!/^[A-Za-z]:[\\/]/.test(source)) throw relative();
+    if (source.indexOf(":", 2) !== -1) throw new ProjectError("source must not name an alternate data stream (a ':' after the drive letter).");
+    const normalised = path.win32.normalize(source);
+    const base = path.win32.basename(normalised).split(".")[0].replace(/[ .]+$/, "");
+    if (RESERVED_NAME.test(base)) throw new ProjectError("source names a reserved Windows device (CON, NUL, COM1, …), not a file.");
+    return normalised;
+  }
+  if (!path.posix.isAbsolute(source)) throw relative();
+  return path.posix.normalize(source);
+}
 
 const NAME_PATTERN = /^[A-Za-z0-9!$][A-Za-z0-9 _!$()-]{0,63}$/;
 // Windows device names (also reserved with an extension, and the console aliases).
@@ -122,7 +162,7 @@ export function inspectAsset(folder: AssetFolder, name: string, head: Buffer, to
   validateAssetName(name);
   const image = isImageFolder(folder);
   if (!Number.isFinite(totalBytes) || totalBytes < 0) throw new ProjectError("Invalid file size.");
-  const cap = image ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
+  const cap = assetSizeCap(folder);
   if (totalBytes > cap) {
     throw new ProjectError(
       `File is ${totalBytes} bytes; ${folder} accepts at most ${cap / (1024 * 1024)} MiB.`,

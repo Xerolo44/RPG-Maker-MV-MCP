@@ -50,6 +50,9 @@ const MAX_BACKUP_SESSIONS = 10;
 const TEMP_SUFFIX = ".mcp-tmp";
 /** File written into a journal entry after its last rename: the commit fully landed. */
 const COMMIT_MARKER = "committed";
+/** Refusal of Project.writeBinary (and of tools that check first) while a changeset is open. */
+export const BINARY_IN_CHANGESET =
+  "Importing binary files is not supported while a changeset is open. Commit or discard the changeset first.";
 
 const toPosix = (p: string): string => p.replace(/\\/g, "/");
 
@@ -277,6 +280,26 @@ export class Project {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, text, "utf8");
     await this.recordWrite(filePath);
+  }
+
+  /**
+   * Write a binary project file (an imported image or sound): session backup, mkdir -p, write,
+   * recordWrite. Binary content cannot be staged, so this is refused while a changeset is open.
+   * The path must lie inside the project folder.
+   */
+  async writeBinary(filePath: string, data: Buffer): Promise<void> {
+    this.assertIdle("writing project files");
+    this.assertRolledBack("writing project files");
+    if (this.changeset) throw new ProjectError(BINARY_IN_CHANGESET);
+    const abs = path.resolve(filePath);
+    const rel = path.relative(this.root, abs);
+    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new ProjectError(`${abs} is outside the project folder.`);
+    }
+    await this.backup(abs);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, data);
+    await this.recordWrite(abs);
   }
 
   /** True if the open changeset holds staged (not yet committed) content for this file. */
