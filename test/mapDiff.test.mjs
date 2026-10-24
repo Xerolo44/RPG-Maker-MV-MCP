@@ -198,6 +198,23 @@ test("render_diff inside an open changeset compares the staged map with the file
   });
 });
 
+test("render_diff on a map created inside the open changeset says it is new", async () => {
+  await withClient(async ({ dir, client }) => {
+    await fs.writeFile(path.join(dir, "data", "MapInfos.json"), JSON.stringify([null, { id: 1, name: "M1", parentId: 0, order: 1, expanded: false }]));
+    await client.callTool({ name: "set_project", arguments: { path: dir } });
+    const begin = await client.callTool({ name: "begin_changeset", arguments: { label: "new map" } });
+    assert.notEqual(begin.isError, true, begin.content[0].text);
+    const made = await client.callTool({ name: "create_map", arguments: { name: "Fresh", width: 5, height: 5, tilesetId: 1 } });
+    assert.notEqual(made.isError, true, made.content[0].text);
+    const id = JSON.parse(made.content[0].text).mapId ?? 2;
+    await assert.rejects(fs.access(path.join(dir, "data", `Map${String(id).padStart(3, "0")}.json`)), "the new map is only staged");
+    const res = await call(client, { mapId: id });
+    assert.notEqual(res.isError, true, res.content[0].text);
+    assert.match(res.content[0].text, /new in the open changeset/);
+    assert.doesNotMatch(res.content[0].text, /missing or unreadable/);
+  });
+});
+
 test("render_diff treats a malformed backup map as not a valid map", async () => {
   await withClient(async ({ dir, client }) => {
     await client.callTool({ name: "set_project", arguments: { path: dir } });

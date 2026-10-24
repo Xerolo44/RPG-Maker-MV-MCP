@@ -301,6 +301,11 @@ export function registerRenderTools(server: McpServer, project: Project): void {
         // Session backups are deferred until commit, so the pre-changeset state is the file on disk.
         oldFile = project.mapFile(mapId);
         label = "the file on disk (before the open changeset)";
+        if (!(await fs.access(oldFile).then(() => true, () => false))) {
+          return textResult(
+            `Map ${mapId} is new in the open changeset (it has no earlier version, and nothing of it is on disk until commit_changeset).`
+          );
+        }
       } else {
         const found = (await project.listBackupSessions()).find((s) => s.files.includes(rel));
         if (found) {
