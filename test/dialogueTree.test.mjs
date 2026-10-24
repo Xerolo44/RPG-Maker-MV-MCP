@@ -218,6 +218,20 @@ test("compileDialogue throws instead of producing a malformed list", () => {
   assert.throws(() => compileDialogue([node]), /maximum is 8/);
 });
 
+test("presentation nodes compile inside choice and if bodies and keep the block structure valid", () => {
+  const list = valid([
+    {
+      choices: [
+        { label: "Go", then: [{ if: { switch: 1 }, then: [{ fade: "out" }, { wait: 10 }], else: [{ moveRoute: { target: "this", steps: ["up"] } }] }] },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    list.map((c) => [c.code, c.indent]),
+    [[102, 0], [402, 0], [111, 1], [221, 2], [230, 2], [411, 1], [205, 2], [505, 2], [412, 1], [404, 0]],
+  );
+});
+
 test("every compiled tree passes validateCommandList(terminated(...))", () => {
   valid([
     { say: ["a", "b", "c", "d", "e"], face: { name: "Actor1", index: 0 } },

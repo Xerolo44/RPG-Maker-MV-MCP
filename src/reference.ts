@@ -37,21 +37,22 @@ ACTOR
 MOVEMENT / MAP
 201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType]
 203 Set Event Location, 204 Scroll Map: [direction, distance, speed]
-205 Set Movement Route: [characterId(-1 player,0 this,N eventId), moveRoute] — visual-only mirror entries use 505
-211 Change Transparency, 212 Show Animation: [characterId, animationId, wait]
-213 Show Balloon Icon: [characterId, balloonId, wait]
+205 Set Movement Route: [characterId(-1 player,0 this,N eventId), {list: [routeCommand..., {"code":0,"parameters":[]}], repeat, skippable, wait}] — a routeCommand is {code, parameters, indent: null}: 1 down, 2 left, 3 right, 4 up, 14 jump [x,y], 15 wait [frames], 16-19 turn down/left/right/up, 27/28 switch ON/OFF [id], 29 speed [1-6], 30 frequency [1-5], 31/32 walk anim ON/OFF, 33/34 step anim ON/OFF, 35/36 direction fix ON/OFF, 37/38 through ON/OFF, 39/40 transparent ON/OFF. Each route command (not the terminator) is repeated as a 505 row [routeCommand] at the same indent as the 205
+211 Change Transparency, 212 Show Animation: [characterId(-1 player,0 this,N eventId), animationId, wait]
+213 Show Balloon Icon: [characterId(-1 player,0 this,N eventId), balloonId(1-10), wait]
 216 Change Player Followers, 217 Gather Followers
 
 SCREEN
 221 Fadeout Screen, 222 Fadein Screen
-223 Tint Screen: [[r,g,b,gray], frames, wait]
-224 Flash Screen: [[r,g,b,intensity], frames, wait]
-225 Shake Screen: [power, speed, frames, wait]
+223 Tint Screen: [[r(-255..255),g,b,gray(0..255)], frames, wait]
+224 Flash Screen: [[r(0..255),g,b,intensity(0..255)], frames, wait]
+225 Shake Screen: [power(1-9), speed(1-9), frames, wait]
+236 Set Weather Effect: ["none"|"rain"|"storm"|"snow", power(1-9), frames, wait]
 
 AUDIO / PICTURES
-241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume, pan, pitch}]
-242 Fadeout BGM: [seconds], 251 Stop SE
-231 Show Picture: [pictureId, "name", origin, designation, x, y, scaleX, scaleY, opacity, blendMode]
+241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume(0-100), pitch(50-150), pan(-100..100)}] (an empty name stops/clears the channel)
+242 Fadeout BGM: [seconds], 246 Fadeout BGS: [seconds], 251 Stop SE
+231 Show Picture: [pictureId(1-100), "name", origin(0 upper left,1 center), designation(0 direct), x, y, scaleX(%), scaleY(%), opacity(0-255), blendMode(0 normal,1 add,2 multiply,3 screen)]
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
