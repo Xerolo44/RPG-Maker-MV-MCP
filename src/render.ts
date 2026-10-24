@@ -1,6 +1,7 @@
 // Software renderer for RPG Maker MV maps: composes tileset sheets, autotiles, shadows and
 // event sprites into an RGBA bitmap the same way the engine's Tilemap does (frame 0 of the
 // water animation). Pure functions, no file access.
+import { passableGrid } from "./passability.js";
 import type { Bitmap } from "./png.js";
 import {
   Sheet,
@@ -91,6 +92,8 @@ export interface RenderInput {
   tileSize: number;
   grid: boolean;
   regions: boolean;
+  /** Tint cells the engine rule marks as blocked translucent red. */
+  passability: boolean;
   /** Tile-image events: an extra tile drawn on top of the lower layers. */
   tileEvents: { x: number; y: number; tileId: number }[];
   sprites: SpriteDraw[];
@@ -215,7 +218,8 @@ function hashColor(n: number): Rgb {
 // ---------------------------------------------------------------------------
 
 export function renderMapBitmap(input: RenderInput): RenderOutput {
-  const { width, height, data, flags, sheets, region, tileSize: ts } = input;
+  const { width, height, data, sheets, region, tileSize: ts } = input;
+  const flags = input.flags ?? [];
   const out: Bitmap = {
     width: region.width * ts,
     height: region.height * ts,
@@ -335,6 +339,16 @@ export function renderMapBitmap(input: RenderInput): RenderOutput {
   if (input.grid && ts >= 12) {
     for (let cx = 0; cx <= region.width; cx++) fillRect(out, cx * ts, 0, cx * ts + 1, out.height, [255, 255, 255], 0.18);
     for (let cy = 0; cy <= region.height; cy++) fillRect(out, 0, cy * ts, out.width, cy * ts + 1, [255, 255, 255], 0.18);
+  }
+
+  if (input.passability) {
+    const walkable = passableGrid({ width, height, data }, flags);
+    for (let cy = 0; cy < region.height; cy++) {
+      for (let cx = 0; cx < region.width; cx++) {
+        if (walkable[(region.y + cy) * width + region.x + cx]) continue;
+        fillRect(out, px(cx, 0), px(cy, 0), px(cx + 1, 0), px(cy + 1, 0), [255, 0, 0], 90 / 255);
+      }
+    }
   }
 
   const outline = ts >= 24 ? 2 : 1;

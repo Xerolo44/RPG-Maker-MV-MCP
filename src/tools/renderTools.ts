@@ -58,7 +58,7 @@ export function registerRenderTools(server: McpServer, project: Project): void {
     {
       title: "Render map as image",
       description:
-        "Render a map to a PNG image so you can SEE what it looks like: all tile layers with correct autotile shapes, shadows and tiles that draw above characters, optionally the events' character sprites, coloured event markers with their ids, region ids and a tile grid. " +
+        "Render a map to a PNG image so you can SEE what it looks like: all tile layers with correct autotile shapes, shadows and tiles that draw above characters, optionally the events' character sprites, coloured event markers with their ids, region ids, a tile grid and a passability overlay (red = blocked in all directions). " +
         "This is the visual counterpart of render_map (text) - use it after paint_tiles / create_event / connect_maps to check your work. " +
         "Marker colours: blue = event with a Transfer Player command (door/exit), orange = shows text, magenta = autorun/parallel, green = anything else. " +
         "Needs the tileset images in img/tilesets (sheets without an image are drawn as flat colours and listed). Large maps are shrunk to fit ~1600px; pass x/y/width/height to zoom into a region and raise tileSize for detail.",
@@ -75,9 +75,10 @@ export function registerRenderTools(server: McpServer, project: Project): void {
           .describe("Draw event character sprites, coloured id markers, both, or neither"),
         showGrid: z.boolean().default(false).describe("Overlay a tile grid"),
         showRegions: z.boolean().default(false).describe("Overlay region ids (layer 5)"),
+        showPassability: z.boolean().default(false).describe("Tint blocked cells translucent red (not walkable in any direction by the tileset flags)"),
       },
     },
-    safe(async ({ mapId, x, y, width, height, tileSize, showEvents, showGrid, showRegions }) => {
+    safe(async ({ mapId, x, y, width, height, tileSize, showEvents, showGrid, showRegions, showPassability }) => {
       const map = await project.readJson<RenderMapFile>(project.mapFile(mapId));
       if (!Array.isArray(map.data) || map.data.length !== map.width * map.height * LAYER_COUNT) {
         throw new ProjectError(`Map ${mapId} has malformed tile data.`);
@@ -176,6 +177,7 @@ export function registerRenderTools(server: McpServer, project: Project): void {
         tileSize: ts,
         grid: showGrid,
         regions: showRegions,
+        passability: showPassability,
         tileEvents,
         sprites,
         markers,
