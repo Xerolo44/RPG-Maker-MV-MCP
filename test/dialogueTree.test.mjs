@@ -400,6 +400,21 @@ test("build_dialogue_tree index: positions inside a multi-line command are refus
   });
 });
 
+test("add_event_command still accepts an index on a 401 continuation line", async () => {
+  await withProjectServer(async (client, { mapFile }) => {
+    const map = JSON.parse(await fs.readFile(mapFile, "utf8"));
+    map.events[1].pages[0].list = [cmd(101, 0, "", 0, 0, 2), cmd(401, 0, "line one"), cmd(401, 0, "line two"), cmd(0, 0)];
+    await fs.writeFile(mapFile, JSON.stringify(map), "utf8");
+    const res = await client.callTool({
+      name: "add_event_command",
+      arguments: { mapId: 1, eventId: 1, index: 1, commands: [cmd(108, 0, "note")] },
+    });
+    assert.ok(!res.isError, res.content[0].text);
+    const list = JSON.parse(await fs.readFile(mapFile, "utf8")).events[1].pages[0].list;
+    assert.deepEqual(codes(list), [101, 108, 401, 401, 0]);
+  });
+});
+
 test("build_dialogue_tree omits preview for long inserted trees and reports a half-specified target", async () => {
   await withProjectServer(async (client) => {
     const tree = Array.from({ length: 21 }, (_, i) => ({ say: `line ${i}` }));

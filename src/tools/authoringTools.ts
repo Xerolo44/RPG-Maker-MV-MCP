@@ -39,7 +39,7 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
           .int()
           .min(0)
           .optional()
-          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator). Positions inside a conditional or choice body are refused"),
+          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator). Positions inside a conditional or choice body, or on a continuation line of a multi-line command (text, comment, script or shop lines: 401, 405, 408, 605, 655), are refused"),
         dryRun: z.boolean().default(false).describe("Compile and validate only; never touches the project files"),
       },
     },
