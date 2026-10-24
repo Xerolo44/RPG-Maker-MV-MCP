@@ -39,7 +39,7 @@ test("validateAssetName accepts normal MV names", () => {
 test("validateAssetName rejects hostile and malformed names", () => {
   const bad = [
     "", " x", "x ", ".", "..", "a/b", "a\\b", "a.png", "x.", "C:x", "../x", "..\\x",
-    "nul", "NUL", "CON", "con", "prn", "aux", "COM1", "com9", "lpt1", "lpt9", "Nul", "CONIN$", "conout$",
+    "nul", "NUL", "CON", "con", "prn", "aux", "COM1", "com9", "lpt1", "lpt9", "COM0", "com0", "LPT0", "lpt0", "Nul", "CONIN$", "conout$",
     "x".repeat(65), "a\0b", "\0", "ｈero", "Ｈero", "hérö", "a\nb", "a\n", "a\tb", "-x", "_x", "(x",
   ];
   for (const n of bad) assert.throws(() => validateAssetName(n), ProjectError, JSON.stringify(n));
@@ -103,6 +103,11 @@ test("inspectAsset: faces, sv_actors, tilesets, animations, titles and battlebac
 test("inspectAsset: audio folders accept ogg and m4a, with no warnings", () => {
   assert.deepEqual(inspectAsset("audio/bgm", "Theme", ogg(), 5 * MiB), { type: "ogg", bytes: 5 * MiB, warnings: [] });
   assert.deepEqual(inspectAsset("audio/se", "Hit", m4a(), 10), { type: "m4a", bytes: 10, warnings: [] });
+});
+
+test("inspectAsset type errors say only the header was checked", () => {
+  assert.throws(() => inspectAsset("audio/bgm", "Theme", png(1, 1), 100), (e) => /header/.test(e.message) && /OggS/.test(e.message) && /ftyp/.test(e.message) && !/Vorbis/.test(e.message));
+  assert.throws(() => inspectAsset("img/faces", "F", ogg(), 100), (e) => /PNG header/.test(e.message));
 });
 
 test("inspectAsset refuses a type that does not fit the folder", () => {

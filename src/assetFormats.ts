@@ -80,7 +80,7 @@ export function checkSourcePath(source: string, platform: string = process.platf
 
 const NAME_PATTERN = /^[A-Za-z0-9!$][A-Za-z0-9 _!$()-]{0,63}$/;
 // Windows device names (also reserved with an extension, and the console aliases).
-const RESERVED_NAME = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CONIN\$|CONOUT\$)$/i;
+const RESERVED_NAME = /^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9]|CONIN\$|CONOUT\$)$/i;
 
 /** Returns `name` when it is a safe asset base name (no extension), otherwise throws `ProjectError`. */
 export function validateAssetName(name: string): string {
@@ -172,7 +172,7 @@ export function inspectAsset(folder: AssetFolder, name: string, head: Buffer, to
   const fits = image ? type === "png" : type === "ogg" || type === "m4a";
   if (!type || !fits) {
     throw new ProjectError(
-      `${folder} accepts ${image ? "PNG images" : "Ogg Vorbis (.ogg) or M4A (.m4a) audio"}, but the file content is ${type ? type.toUpperCase() : "not a recognised PNG, Ogg or M4A file"}.`,
+      `${folder} accepts ${image ? "files with a PNG header" : "files whose header is Ogg (OggS) or ISO-BMFF/M4A (ftyp)"} (only the header is checked), but this file's header is ${type ? type.toUpperCase() : "not a recognised PNG, Ogg or M4A header"}.`,
     );
   }
   if (type !== "png") return { type, bytes: totalBytes, warnings: [] };

@@ -9,6 +9,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { assetSizeCap, checkSourcePath } from "../dist/assetFormats.js";
 import { encodePng } from "../dist/png.js";
 import { Project, ProjectError } from "../dist/project.js";
+import { readSource } from "../dist/tools/assetTools.js";
+import { spawnSync } from "node:child_process";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -113,6 +115,62 @@ test("checkSourcePath rejects relative, drive-relative, stream, reserved, contro
 test("assetSizeCap is 32 MiB for images and 128 MiB for audio", () => {
   assert.equal(assetSizeCap("img/pictures"), 32 * 1024 * 1024);
   assert.equal(assetSizeCap("audio/se"), 128 * 1024 * 1024);
+});
+
+// ---- readSource (in-process, so the file can be changed in the middle of the read) ----
+
+test("readSource refuses a file that changes while it is being read", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mvmcp-race-"));
+  const file = path.join(dir, "Grow.png");
+  await fs.writeFile(file, png(4, 4));
+  const probe = await fs.open(file, "r");
+  const proto = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = proto.read;
+  proto.read = async function (...args) {
+    const res = await original.apply(this, args);
+    await fs.appendFile(file, Buffer.from([1, 2, 3])); // the file grows after the first read
+    return res;
+  };
+  try {
+    await assert.rejects(readSource(file, "img/pictures"), (e) => e instanceof ProjectError && /changed while it was being read/.test(e.message));
+  } finally {
+    proto.read = original;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+  assert.ok(Buffer.isBuffer(await (async () => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), "mvmcp-race-"));
+    try {
+      await fs.writeFile(path.join(d, "Ok.png"), png(4, 4));
+      return await readSource(path.join(d, "Ok.png"), "img/pictures");
+    } finally {
+      await fs.rm(d, { recursive: true, force: true });
+    }
+  })()));
+});
+
+test("readSource does not hang on a FIFO swapped in after lstat", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("no FIFOs on Windows");
+    return;
+  }
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mvmcp-fifo-"));
+  const fifo = path.join(dir, "Pipe.png");
+  const real = path.join(dir, "Real.png");
+  await fs.writeFile(real, png(4, 4));
+  if (spawnSync("mkfifo", [fifo]).status !== 0) {
+    await fs.rm(dir, { recursive: true, force: true });
+    t.skip("mkfifo not available");
+    return;
+  }
+  const originalLstat = fs.lstat;
+  fs.lstat = async (p, ...rest) => (p === fifo ? originalLstat(real, ...rest) : originalLstat(p, ...rest));
+  try {
+    await assert.rejects(readSource(fifo, "img/pictures"), ProjectError);
+  } finally {
+    fs.lstat = originalLstat;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ---- Project.writeBinary ----
@@ -370,6 +428,22 @@ test("audio imports warn when the sibling format is missing, and the other forma
     assert.deepEqual(r2.json.warnings, []);
     await fs.access(at("audio/bgm/Theme.ogg"));
   });
+});
+
+test("the tool description says only headers are checked, not codecs or whole images", async () => {
+  const client = new Client({ name: "import-desc", version: "0.0.0" });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [entry], stderr: "ignore" }));
+  try {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "import_asset");
+    assert.ok(tool);
+    assert.ok(!/Vorbis/.test(tool.description), tool.description);
+    assert.match(tool.description, /OggS/);
+    assert.match(tool.description, /ftyp/);
+    assert.match(tool.description, /signature \+ IHDR/);
+    assert.match(tool.description, /not the codec/);
+  } finally {
+    await client.close();
+  }
 });
 
 test("no project selected", async () => {

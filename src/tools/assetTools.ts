@@ -18,10 +18,13 @@ import { safe, textResult } from "../util.js";
 /**
  * Read a caller-named source file after the string checks: lstat must show a regular file (not a
  * symbolic link, directory or device), non-empty and within the folder's size cap, all before a
- * single byte is read. The file is then opened (O_NOFOLLOW where the OS has it) and the handle's
- * fstat must match the lstat (same dev/ino/size), so a file swapped in between is refused.
+ * single byte is read. The file is then opened with O_NOFOLLOW and O_NONBLOCK where the OS has
+ * them (so a FIFO swapped in after the lstat cannot hang the open) and the handle's fstat must
+ * match the lstat (regular file, same dev/ino/size), so a file swapped in between is refused.
+ * After the read a second fstat must show the same size and mtime, so a file that grew or was
+ * rewritten during the read is refused too. Exported for tests.
  */
-async function readSource(source: string, folder: AssetFolder): Promise<Buffer> {
+export async function readSource(source: string, folder: AssetFolder): Promise<Buffer> {
   let st: Stats;
   try {
     st = await fs.lstat(source);
@@ -40,7 +43,7 @@ async function readSource(source: string, folder: AssetFolder): Promise<Buffer> 
   }
   let fh: fs.FileHandle;
   try {
-    fh = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    fh = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   } catch (err) {
     throw new ProjectError(`Cannot open source file ${source} (${(err as NodeJS.ErrnoException).code ?? "error"}).`);
   }
@@ -56,7 +59,10 @@ async function readSource(source: string, folder: AssetFolder): Promise<Buffer> 
       if (bytesRead === 0) break;
       off += bytesRead;
     }
-    if (off !== buf.length) throw new ProjectError(`Source ${source} changed while it was being read; nothing was imported.`);
+    const after = await fh.stat();
+    if (off !== buf.length || after.size !== now.size || after.mtimeMs !== now.mtimeMs) {
+      throw new ProjectError(`Source ${source} changed while it was being read; nothing was imported.`);
+    }
     return buf;
   } finally {
     await fh.close();
@@ -83,7 +89,7 @@ export function registerAssetTools(server: McpServer, project: Project): void {
       description:
         "Copy an image or sound file from this computer into the project: <project>/<folder>/<name>.<ext>. " +
         "source must be an absolute local path to a regular file (no relative paths, network/UNC shares, devices or symbolic links). " +
-        "The type is read from the file's content, never its extension: img/* folders take PNG only (max 32 MiB), audio/* folders take Ogg Vorbis (.ogg) or M4A (.m4a) only (max 128 MiB); the extension is chosen from the detected type. " +
+        "The type is read from the file's header, never its extension: img/* folders take files with a PNG header (max 32 MiB; only the signature + IHDR is checked, not the whole image), audio/* folders take files whose header is Ogg (OggS) or ISO-BMFF/M4A (ftyp) (max 128 MiB; only the header is checked, not the codec or the full file); the extension (.png, .ogg, .m4a) is chosen from the detected header. " +
         "name defaults to the source file name without its extension and must be 1-64 characters from A-Z a-z 0-9 space _ ! $ ( ) - (no dots, no path); a '$' prefix on a character sheet means one character per sheet, '!' means no offset. " +
         "An existing file with the same name (letter case ignored) is only replaced with overwrite: true; the old file goes to the session backup (list_backups / restore_backup). " +
         "Nothing is converted or resized; warnings flag sheet sizes that do not fit the folder's layout, and for audio a missing sibling format (MV's web build needs both .ogg and .m4a). " +
