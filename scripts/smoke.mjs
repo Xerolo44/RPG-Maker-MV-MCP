@@ -133,6 +133,8 @@ await call("add_event_command", { mapId: 1, eventId: 2, commands: [
 await call("search_map_events", { query: "guard" }, (t) => t.includes('"eventId": 2'));
 await call("search_map_events", { query: "halt! who", searchCommands: true },
   (t) => t.includes("command 401"));
+await call("simulate_event", { mapId: 1, eventId: 2 },
+  (t) => t.includes("Halt! Who goes there?") && t.includes('"ended": "end"'));
 
 // system name setters
 await call("set_switch_name", { id: 5, name: "Boss Defeated" }, (t) => t.includes("Boss Defeated"));
@@ -144,6 +146,26 @@ await call("add_dialogue", { mapId: 1, eventId: 2,
   lines: ["Line one.", "Line two.", "Line three.", "Line four.", "Line five."],
   faceName: "Actor1" },
   (t) => t.includes('"inserted": 7') && t.includes('"messageBoxes": 2'));
+
+// build_dialogue_tree: dry run touches nothing, then a choice tree is compiled into the Guard event
+await call("build_dialogue_tree", { tree: [{ say: "Dry run only." }] },
+  (t) => t.includes('"commands": 2') && !t.includes('"inserted"'));
+await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
+  { say: "Will you help?" },
+  { choices: [
+    { label: "Of course", then: [{ setSwitch: { id: 1, value: true } }, { say: "Thanks!" }] },
+    { label: "Not today", then: [{ say: "Pity." }] },
+  ], cancel: "branch" },
+] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
+await call("search_map_events", { query: "of course", searchCommands: true },
+  (t) => t.includes('"eventId": 2') && t.includes("command 102"));
+
+// create_event_from_template: a chest on a free tile, then an occupied-tile refusal
+await call("create_event_from_template", { mapId: 1, x: 6, y: 6, template: "chest",
+  reward: { gold: 100 }, message: "Found 100G!" },
+  (t) => t.includes('"eventId"') && t.includes('"pages": 2'));
+await expectError("create_event_from_template refuses an occupied tile", "create_event_from_template",
+  { mapId: 1, x: 6, y: 6, template: "save_point" }, "allowStack");
 
 // map creation
 await call("create_map", { name: "Cave", width: 20, height: 15 },
@@ -253,6 +275,16 @@ await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
   if (!ok) { failures++; console.log("    ", r.content?.[0]?.text?.slice(0, 300)); }
 }
 await expectError("render_map_image outside the map errors", "render_map_image", { mapId: 1, x: 50 }, "outside");
+
+// render_diff: map 1 was painted this session, map 3 was created this session (no earlier version)
+{
+  const r = await client.callTool({ name: "render_diff", arguments: { mapId: 1, tileSize: 16 } });
+  const png = r.content?.find((c) => c.type === "image");
+  const ok = !r.isError && !!png && png.mimeType === "image/png" && /(^|\s)[1-9]\d* changed cell/.test(r.content[0].text);
+  console.log(`${ok ? "PASS" : "FAIL"} render_diff reports changed cells and returns a PNG`);
+  if (!ok) { failures++; console.log("    ", r.content?.[0]?.text?.slice(0, 300)); }
+}
+await call("render_diff", { mapId: 3 }, (t) => t.includes("no earlier version"));
 
 // map connector
 await call("connect_maps", {
@@ -379,6 +411,30 @@ await call("get_record", { type: "actors", id: 1 }, (t) => t.includes("Harold") 
   check("undone event is gone from disk", !(await onDisk()));
   await expectError("commit_changeset with nothing open errors", "commit_changeset", {}, "No changeset is open");
 }
+
+// stamps: capture a 3x3 region of map 1 (autotiles, a B tile, chest events) and place it on map 2
+await call("capture_stamp", { mapId: 1, x: 6, y: 6, width: 3, height: 3, name: "Corner" },
+  (t) => /"events": [1-9]/.test(t));
+await call("list_stamps", {}, (t) => t.includes('"Corner"'));
+await call("place_stamp", { mapId: 2, x: 10, y: 5, name: "Corner" }, (t) => t.includes('"eventIds"'));
+const idRows = (text) => text.split("\n").slice(1).map((l) => l.trim().split(/\s+/).slice(1).join(" "));
+const stampedB = idRows(await ids(2, 2, 10, 5, 3, 3));
+const sourceB = idRows(await ids(1, 2, 6, 6, 3, 3));
+const sameB = stampedB.join("|") === sourceB.join("|") && sourceB.join(" ").includes("5");
+console.log(`${sameB ? "PASS" : "FAIL"} placed stamp has the same B-sheet ids as the source region`);
+if (!sameB) { failures++; console.log(sourceB, stampedB); }
+// autotile shapes are recomputed against the new surroundings, so only the kind carries over (A2 kind 16 = ids 2816-2863)
+const stampedA = idRows(await ids(2, 0, 10, 5, 3, 3)).join(" ").split(" ").map(Number);
+const kindOk = stampedA.length === 9 && stampedA.every((id) => id >= 2816 && id < 2864);
+console.log(`${kindOk ? "PASS" : "FAIL"} placed stamp keeps the autotile kind on layer 0`);
+if (!kindOk) { failures++; console.log(stampedA); }
+await expectError("place_stamp outside the map errors", "place_stamp", { mapId: 2, x: 19, y: 14, name: "Corner" }, "not fully inside");
+await expectError("capture_stamp rejects a reserved name", "capture_stamp",
+  { mapId: 1, x: 0, y: 0, width: 1, height: 1, name: "CON" }, "Invalid stamp name");
+
+// procedural generation: a dungeon on the fixture tileset (profile suggested from its data)
+await call("generate_map", { kind: "dungeon", create: { name: "Generated", width: 30, height: 20, tilesetId: 1 }, seed: 1 },
+  (t) => t.includes('"reachable"'));
 
 await call("playtest_start", { mode: "browser", port: 8391 }, (t) => t.includes("http://127.0.0.1:8391"));
 const res = await fetch("http://127.0.0.1:8391/data/System.json");

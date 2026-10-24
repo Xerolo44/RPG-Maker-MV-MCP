@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { passableGrid } from "../dist/passability.js";
+import { floorWalkable, passableGrid, wallBlocking } from "../dist/passability.js";
 
 // 2x1 map, 6 layers: data index = (z * height + y) * width + x.
 const map = (cells) => {
@@ -31,4 +31,11 @@ test("layer 3 outranks layer 0", () => {
   const flags = [0, 0x0f, 0];
   assert.deepEqual([...passableGrid(map([[0, 0, 1], [3, 0, 2]]), flags)], [1, 1]);
   assert.deepEqual([...passableGrid(map([[0, 0, 2], [3, 0, 1]]), flags)], [0, 1]);
+});
+
+test("floorWalkable and wallBlocking follow passableGrid's rule", () => {
+  for (const [flag, walk, block] of [[0, true, false], [0x01, false, true], [0x0e, false, true], [0x0f, false, true], [0x10, true, false], [0x1f, false, false]]) {
+    assert.equal(floorWalkable(flag), walk, `floorWalkable(0x${flag.toString(16)})`);
+    assert.equal(wallBlocking(flag), block, `wallBlocking(0x${flag.toString(16)})`);
+  }
 });

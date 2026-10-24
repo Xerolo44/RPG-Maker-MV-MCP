@@ -4,6 +4,7 @@ import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
 import { TileError, TileSpec, applyPaintOps } from "../tiles.js";
 import { EVENT_COMMAND_REFERENCE } from "../reference.js";
+import { messageCommands } from "../dialogueTree.js";
 import { checkSheetsAvailable, loadTileset, tileSpecSchema } from "./tileTools.js";
 
 interface MapInfo {
@@ -16,7 +17,7 @@ interface MapInfo {
   scrollY?: number;
 }
 
-interface MvEvent {
+export interface MvEvent {
   id: number;
   name: string;
   x: number;
@@ -25,7 +26,7 @@ interface MvEvent {
   pages: unknown[];
 }
 
-interface MvMap {
+export interface MvMap {
   width: number;
   height: number;
   data: number[];
@@ -78,7 +79,56 @@ async function readMap(project: Project, mapId: number): Promise<MvMap> {
   return project.readJson<MvMap>(project.mapFile(mapId));
 }
 
-async function insertEventCommands(
+/** Codes that continue or close a block: commands placed just before one of them belong to the preceding body. */
+const BLOCK_CONTINUATION_CODES = new Set([402, 403, 404, 411, 412, 413]);
+
+/**
+ * Indent a command inserted at `index` would need to sit at the same nesting level as its neighbours
+ * (same position rule as insertEventCommands). 0 when the event or page does not exist, so the insert
+ * itself reports that error.
+ */
+export async function insertionIndent(
+  project: Project,
+  mapId: number,
+  eventId: number,
+  pageIndex: number,
+  index: number | undefined
+): Promise<number> {
+  const map = await project.readJson<MvMap>(project.mapFile(mapId));
+  const list = (map.events?.[eventId]?.pages[pageIndex] as { list?: { code: number; indent: number }[] } | undefined)?.list;
+  if (!Array.isArray(list) || list.length === 0) return 0;
+  const defaultPos = list[list.length - 1]?.code === 0 ? list.length - 1 : list.length;
+  const at = list[Math.min(index ?? defaultPos, defaultPos)];
+  if (!at) return 0;
+  return (at.indent ?? 0) + (BLOCK_CONTINUATION_CODES.has(at.code) ? 1 : 0);
+}
+
+/**
+ * Command codes that only continue the command before them: 401 text line, 405 scrolling text line,
+ * 408 comment line, 605 shop good, 655 script line. Inserting before one splits a multi-line command.
+ */
+const MULTILINE_CONTINUATION_CODES = new Set([401, 405, 408, 605, 655]);
+
+/**
+ * The continuation code of the command a new insertion at `index` would push down, or undefined when the
+ * position sits between whole commands (same position rule as insertEventCommands).
+ */
+export async function multiLineContinuationAt(
+  project: Project,
+  mapId: number,
+  eventId: number,
+  pageIndex: number,
+  index: number | undefined
+): Promise<number | undefined> {
+  const map = await project.readJson<MvMap>(project.mapFile(mapId));
+  const list = (map.events?.[eventId]?.pages[pageIndex] as { list?: { code: number }[] } | undefined)?.list;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  const defaultPos = list[list.length - 1]?.code === 0 ? list.length - 1 : list.length;
+  const at = list[Math.min(index ?? defaultPos, defaultPos)];
+  return at && MULTILINE_CONTINUATION_CODES.has(at.code) ? at.code : undefined;
+}
+
+export async function insertEventCommands(
   project: Project,
   mapId: number,
   eventId: number,
@@ -109,7 +159,7 @@ async function insertEventCommands(
   return { inserted: commands.length, at: pos, listLength: page.list.length, page: pageIndex };
 }
 
-function blankMap(name: string, width: number, height: number, tilesetId: number): MvMap {
+export function blankMap(name: string, width: number, height: number, tilesetId: number): MvMap {
   return {
     autoplayBgm: false,
     autoplayBgs: false,
@@ -136,6 +186,33 @@ function blankMap(name: string, width: number, height: number, tilesetId: number
     data: new Array(width * height * 6).fill(0),
     events: [null],
   };
+}
+
+/**
+ * Register a new map: pick the next free id, add it to MapInfos.json (last in the editor order, scrolled
+ * to its centre) and write the map file. Returns the new map id. Used by create_map and generate_map.
+ */
+export async function addMapToProject(
+  project: Project,
+  info: { name: string; width: number; height: number; parentId: number },
+  map: MvMap
+): Promise<number> {
+  const infosFile = project.dataFile("MapInfos.json");
+  const infos = await project.readJson<({ id: number; order: number } | null)[]>(infosFile);
+  const id = infos.length;
+  const maxOrder = Math.max(0, ...infos.filter((m) => m != null).map((m) => m!.order ?? 0));
+  infos.push({
+    id,
+    expanded: false,
+    name: info.name,
+    order: maxOrder + 1,
+    parentId: info.parentId,
+    scrollX: (info.width * 48) / 2,
+    scrollY: (info.height * 48) / 2,
+  } as never);
+  await project.writeJson(project.mapFile(id), map);
+  await project.writeJson(infosFile, infos);
+  return id;
 }
 
 export function registerMapTools(server: McpServer, project: Project): void {
@@ -375,13 +452,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
       },
     },
     safe(async ({ mapId, eventId, pageIndex, lines, faceName, faceIndex, background, position }) => {
-      const commands: { code: number; indent: number; parameters: unknown[] }[] = [];
-      for (let i = 0; i < lines.length; i += 4) {
-        commands.push({ code: 101, indent: 0, parameters: [faceName, faceIndex, background, position] });
-        for (const line of lines.slice(i, i + 4)) {
-          commands.push({ code: 401, indent: 0, parameters: [line] });
-        }
-      }
+      const commands = messageCommands(lines, faceName, faceIndex, background, position, 0);
       const result = await insertEventCommands(project, mapId, eventId, pageIndex, commands);
       return textResult({ ...result, messageBoxes: Math.ceil(lines.length / 4) });
     })
@@ -415,21 +486,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
           throw err;
         }
       }
-      const infosFile = project.dataFile("MapInfos.json");
-      const infos = await project.readJson<({ id: number; order: number } | null)[]>(infosFile);
-      const id = infos.length;
-      const maxOrder = Math.max(0, ...infos.filter((m) => m != null).map((m) => m!.order ?? 0));
-      infos.push({
-        id,
-        expanded: false,
-        name,
-        order: maxOrder + 1,
-        parentId,
-        scrollX: (width * 48) / 2,
-        scrollY: (height * 48) / 2,
-      } as never);
-      await project.writeJson(project.mapFile(id), newMap);
-      await project.writeJson(infosFile, infos);
+      const id = await addMapToProject(project, { name, width, height, parentId }, newMap);
       return textResult({ created: { mapId: id, name, width, height, tilesetId, filled: fill !== undefined } });
     })
   );

@@ -1,6 +1,7 @@
 // Software renderer for RPG Maker MV maps: composes tileset sheets, autotiles, shadows and
 // event sprites into an RGBA bitmap the same way the engine's Tilemap does (frame 0 of the
 // water animation). Pure functions, no file access.
+import { passableGrid } from "./passability.js";
 import type { Bitmap } from "./png.js";
 import {
   Sheet,
@@ -91,10 +92,14 @@ export interface RenderInput {
   tileSize: number;
   grid: boolean;
   regions: boolean;
+  /** Tint cells the engine rule marks as blocked translucent red. */
+  passability: boolean;
   /** Tile-image events: an extra tile drawn on top of the lower layers. */
   tileEvents: { x: number; y: number; tileId: number }[];
   sprites: SpriteDraw[];
   markers: MarkerDraw[];
+  /** Cells to outline with a 2 px inner border, drawn after the markers. May be omitted by plain callers. */
+  outlines: { x: number; y: number; color: Rgb }[];
 }
 
 export interface RenderOutput {
@@ -215,7 +220,8 @@ function hashColor(n: number): Rgb {
 // ---------------------------------------------------------------------------
 
 export function renderMapBitmap(input: RenderInput): RenderOutput {
-  const { width, height, data, flags, sheets, region, tileSize: ts } = input;
+  const { width, height, data, sheets, region, tileSize: ts } = input;
+  const flags = input.flags ?? [];
   const out: Bitmap = {
     width: region.width * ts,
     height: region.height * ts,
@@ -337,6 +343,16 @@ export function renderMapBitmap(input: RenderInput): RenderOutput {
     for (let cy = 0; cy <= region.height; cy++) fillRect(out, 0, cy * ts, out.width, cy * ts + 1, [255, 255, 255], 0.18);
   }
 
+  if (input.passability) {
+    const walkable = passableGrid({ width, height, data }, flags);
+    for (let cy = 0; cy < region.height; cy++) {
+      for (let cx = 0; cx < region.width; cx++) {
+        if (walkable[(region.y + cy) * width + region.x + cx]) continue;
+        fillRect(out, px(cx, 0), px(cy, 0), px(cx + 1, 0), px(cy + 1, 0), [255, 0, 0], 90 / 255);
+      }
+    }
+  }
+
   const outline = ts >= 24 ? 2 : 1;
   const labelScale = Math.max(1, Math.floor(ts / 16));
   for (const m of input.markers) {
@@ -348,6 +364,17 @@ export function renderMapBitmap(input: RenderInput): RenderOutput {
     fillRect(out, x0, y0, x0 + outline, y0 + ts, m.color, 1);
     fillRect(out, x0 + ts - outline, y0, x0 + ts, y0 + ts, m.color, 1);
     if (m.label !== undefined && ts >= 12) drawNumber(out, x0 + outline, y0 + outline, m.label, labelScale, [255, 255, 255], m.color);
+  }
+
+  for (const o of input.outlines ?? []) {
+    if (o.x < region.x || o.y < region.y || o.x >= region.x + region.width || o.y >= region.y + region.height) continue;
+    const x0 = (o.x - region.x) * ts;
+    const y0 = (o.y - region.y) * ts;
+    const t = Math.min(2, Math.floor(ts / 2));
+    fillRect(out, x0, y0, x0 + ts, y0 + t, o.color, 1);
+    fillRect(out, x0, y0 + ts - t, x0 + ts, y0 + ts, o.color, 1);
+    fillRect(out, x0, y0, x0 + t, y0 + ts, o.color, 1);
+    fillRect(out, x0 + ts - t, y0, x0 + ts, y0 + ts, o.color, 1);
   }
 
   return { bitmap: out, missingSheets: [...missing] };

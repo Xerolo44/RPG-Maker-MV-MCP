@@ -6,23 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".gif": "image/gif",
-  ".ogg": "audio/ogg",
-  ".m4a": "audio/mp4",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ttf": "font/ttf",
-  ".woff": "font/woff",
-  ".ico": "image/x-icon",
-};
+import { startStaticServer } from "../playtest/staticServer.js";
 
 function nwjsCandidates(projectRoot: string): string[] {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
@@ -98,33 +82,9 @@ class PlaytestManager {
     await this.stop();
     this.logs = [];
     this.mode = "browser";
-    const root = this.project.root;
-
-    const server = http.createServer((req, res) => {
-      const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
-      const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
-      const filePath = path.join(root, relative);
-      if (!filePath.startsWith(root)) {
-        res.writeHead(403).end("Forbidden");
-        return;
-      }
-      fs.readFile(filePath, (err, content) => {
-        if (err) {
-          res.writeHead(404).end("Not found");
-          return;
-        }
-        const type = MIME_TYPES[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
-        res.writeHead(200, { "Content-Type": type });
-        res.end(content);
-      });
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(port, "127.0.0.1", () => resolve());
-    });
+    const { server, url } = await startStaticServer(this.project.root, port);
     this.httpServer = server;
-    this.url = `http://127.0.0.1:${port}/index.html?test`;
+    this.url = `${url}/index.html?test`;
     this.log(`static server listening on ${this.url}`);
     return {
       mode: "browser",

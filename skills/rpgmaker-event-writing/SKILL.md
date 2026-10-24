@@ -9,6 +9,8 @@ An event has `pages`; each page has `conditions`, an `image`, a `trigger` and a 
 
 ## Fast paths
 - **Dialogue:** `add_dialogue {mapId, eventId, lines, faceName?, position?}` builds the 101/401 commands and starts a new message box every 4 lines (the window shows 4 lines).
+- **Common patterns (preferred):** `create_event_from_template {mapId, x, y, template, ...}` builds a finished chest, locked door, inn, shop, save point or NPC in one write; it refuses an occupied tile unless `allowStack` is true. Events are invisible until you give them an image.
+- **Branching conversations (preferred):** `build_dialogue_tree {tree, mapId?, eventId?}` compiles nested say / choices / if / set-switch / set-variable / transfer nodes into correctly indented commands. Call it without `mapId`/`eventId` (or with `dryRun`) to preview first. Use these two before hand-writing `add_event_command` lists; the hand-built indent and terminator bookkeeping is where most event bugs come from.
 - **Anything else:** `add_event_command` with a `commands` array; it inserts before the terminator, or at `index`.
 - **New NPC:** `create_event {mapId, name, x, y}` then `add_dialogue`. Give it a sprite by passing a page with `image: {characterName, characterIndex, direction, pattern: 1}` (look at an existing event with `get_event` for the full page shape).
 
@@ -39,6 +41,8 @@ Trigger: 0 action button, 1 player touch, 2 event touch, 3 autorun, 4 parallel. 
 201 Transfer Player `[0, mapId, x, y, direction, fade]` (prefer `connect_maps`), 301 Battle `[0, troopId, canEscape, canLose]`, 302 Shop, 125 Change Gold, 126 Change Items, 121 Control Switches, 122 Control Variables, 117 Common Event, 241 Play BGM, 355 Script.
 
 ## Checks
+- `simulate_event {mapId, eventId, switches?, variables?, selfSwitches?, gold?, items?, choices?}` dry-runs one event page against a state you choose and returns the messages, switch/variable/gold/item changes and the transfer it ends in, without playing the game. Use it to confirm a quest gate or one-time chest does what you meant (`choices` lists the answers in order; the page defaults to the one that would be active). Commands it cannot simulate (scripts, audio, pictures, movement, ...) are listed under `unsupported` and skipped, so it is a check, not a replacement for a playtest.
+- `lint_events` statically checks maps, common events and troops: broken blocks and missing terminators, unreachable commands, over-long message lines, transfers to missing maps or outside a map, missing common events and (with `minSeverity: "info"`) unnamed switches/variables. Run it after hand-built `add_event_command` lists.
 - `search_map_events {query, searchCommands: true}` finds where a line or script is used.
 - `validate_project` finds transfers to missing maps and references to missing items/skills/common events.
 - Read dialogue aloud: keep lines under about 40 characters and no more than 4 lines per box; use `\C[n]` colour codes and `\N[1]` actor names sparingly (in JSON they are written `\\C[n]`).

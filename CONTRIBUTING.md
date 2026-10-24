@@ -29,6 +29,16 @@ src/
 ├── passability.ts           map passability following MV's checkPassage rule (pure)
 ├── lint.ts                  static checks for event command lists (lint_events)
 ├── assets.ts                asset reference scan against the files on disk (audit_assets)
+├── eventSim.ts              dry-run interpreter for event command lists (simulate_event, pure)
+├── dialogueTree.ts          dialogue tree to event commands compiler (build_dialogue_tree, pure)
+├── eventTemplates.ts        chest/door/inn/shop/save point/NPC templates (create_event_from_template, pure)
+├── mapDiff.ts               tile and event diff between two map files (render_diff, pure)
+├── stamps.ts                capture/place map stamps stored in .mcp-stamps/
+├── tileProfile.ts           tile profiles and their suggestion from tileset data (pure)
+├── gen/                     procedural map generators (pure): layout.ts shared types and helpers,
+│                            dungeon.ts, cave.ts, materialize.ts (layout to paint operations)
+├── playtest/
+│   └── staticServer.ts      static file server for browser playtests (safe path resolution)
 ├── util.ts                  tool result helpers and error wrapping
 ├── tiles.ts                 tile-id encoding, autotile shapes, map painting (pure)
 ├── render.ts, png.ts        map renderer and the dependency-free PNG codec (pure)
@@ -43,8 +53,10 @@ src/
     ├── skillTools.ts        high-level skill creation helpers
     ├── searchTools.ts       search across databases and map events
     ├── mapTools.ts          maps, events, event commands, dialogue helper
+    ├── authoringTools.ts    build_dialogue_tree, create_event_from_template
+    ├── generationTools.ts   generate_map, capture_stamp, place_stamp, list_stamps
     ├── tileTools.ts         tilesets and paint_tiles / render_map
-    ├── renderTools.ts       render_map_image
+    ├── renderTools.ts       render_map_image, render_diff
     ├── connectTools.ts      connect_maps, list_map_connections
     ├── balanceTools.ts      bulk edits, curves, balance_report, simulate_battle
     ├── localizationTools.ts export_texts, import_texts
@@ -52,7 +64,7 @@ src/
     ├── playtestTools.ts     NW.js / browser playtesting
     ├── maintenanceTools.ts  backups, editor_status and project validation
     ├── changesetTools.ts    begin/commit/discard/undo_changeset
-    └── analysisTools.ts     audit_assets, lint_events
+    └── analysisTools.ts     audit_assets, lint_events, simulate_event
 skills/                      bundled SKILL.md workflow guides (shipped in the npm package)
 scripts/
 ├── smoke.mjs                end-to-end smoke test

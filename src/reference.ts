@@ -10,7 +10,7 @@ MESSAGES
 105 Show Scrolling Text: [speed, noFast] — lines follow as 405 ["text"]
 
 FLOW CONTROL
-111 Conditional Branch: params vary — [0, switchId, 0=ON/1=OFF] for switch; [1, varId, 0, operand, value, op(0:=,1:>=,2:<=,3:>,4:<,5:!=)] for variable — else branch 411, end 412
+111 Conditional Branch: params vary by first slot — [0, switchId, 0=ON/1=OFF] switch; [1, varId, 0, value, op(0:=,1:>=,2:<=,3:>,4:<,5:!=)] variable vs constant; [2, "A"|"B"|"C"|"D", 0=ON/1=OFF] self switch; [7, gold, op(0:>=,1:<=,2:<)] gold; [8, itemId] party has item — else branch 411, end 412
 112 Loop (end 413 Repeat Above), 113 Break Loop, 115 Exit Event Processing
 117 Common Event: [commonEventId]
 118 Label: ["name"], 119 Jump to Label: ["name"]
@@ -31,7 +31,7 @@ PARTY
 ACTOR
 311 Change HP: [actorType(0 fixed,1 var), actorId, op, operandType, value, allowDeath]
 312 Change MP, 313 Change State: [..., 0=add/1=remove, stateId]
-314 Recover All, 315 Change EXP, 316 Change Level, 317 Change Parameter
+314 Recover All: [0, 0] (0 = whole party), 315 Change EXP, 316 Change Level, 317 Change Parameter
 318 Change Skill: [actorType, actorId, 0=learn/1=forget, skillId]
 
 MOVEMENT / MAP
@@ -56,7 +56,7 @@ AUDIO / PICTURES
 
 SCENES / BATTLE
 301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — win branch 601, escape 602, lose 603, end 604
-302 Shop Processing: [[goodsType, id, priceType, price], purchaseOnly] — extra goods rows as 605
+302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
 351 Open Menu Screen, 352 Open Save Screen, 353 Game Over, 354 Return to Title
 

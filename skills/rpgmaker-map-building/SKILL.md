@@ -9,7 +9,7 @@ description: How to build RPG Maker MV maps with the rpgmaker-mv MCP server - ch
 1. `create_map` with a size and `tilesetId`; pass `fill` (e.g. `{sheet: "A2", kind: 16}`) so layer 0 is not empty.
 2. `get_tileset_info {tilesetId}` for the overview, then `get_tileset_info {tilesetId, sheet: "A2"}` for kinds and passability. `get_tileset_image` shows the sheet so you can pick by looks.
 3. `paint_tiles` with a list of operations (`cells`, `rect`, `fill`). Autotile edges and corners are computed for you - paint plain rectangles and let the shapes resolve.
-4. **`render_map_image` after every few operations.** It draws the real graphics, event sprites and numbered markers. Use `x/y/width/height` to zoom and `showGrid` to read coordinates.
+4. **`render_map_image` after every few operations.** It draws the real graphics, event sprites and numbered markers. Use `x/y/width/height` to zoom and `showGrid` to read coordinates and `showPassability` to tint cells red that are blocked in at least one direction.
 5. Fix what looks wrong and repeat. `render_map` (text) is the cheap alternative when you only need exact tile ids.
 
 ## Layers
@@ -33,6 +33,18 @@ Erasing needs an explicit layer: `{tile: 0, layer: 2, ...}`.
 - Leave a walkable border or an exit; players must be able to reach every event.
 - Vary the ground: a second A2 kind in patches looks much better than one flat fill.
 - Keep doors and exits 1 tile wide and mark them clearly.
+
+## Generating dungeons and caves
+`generate_map` makes a seeded dungeon (rooms and corridors) or cave and paints it, so you do not paint a maze by hand:
+1. `generate_map {kind, create: {name, width, height, tilesetId}}` (or `mapId` for an existing empty map; a map with tiles or events needs `overwrite: true`). Pass `markers: {entrance, exit, chests}` and a `seed` if you want the result repeatable. The seed, the tile profile used (`profileUsed`, suggested from the tileset unless you pass `profile`) and the marker positions come back.
+2. `render_map_image {mapId, showPassability: true}` and look. Wall faces are one row tall and decor is sparse, so check it by eye; try another `seed` or pass your own `profile` if it looks wrong.
+3. Markers are empty priority-0 events (`Entrance`, `Exit`, `Chest 1..n`). Wire the doors with `connect_maps` on those tiles with `allowOverlap: true` (or `delete_event` the marker first), and turn each chest marker into a real chest with `create_event_from_template` (`allowStack: true` on the marker's tile, or delete the marker first).
+4. Sizes: dungeons need at least 14x7 (or 7x14); caves are reliable from about 13x13 (17x13 never failed); 9x9 to 12x12 and thin maps fail for many seeds - try another seed or a larger map.
+
+`capture_stamp {mapId, x, y, width, height, name}` saves a hand-built piece (a house, a well) under `.mcp-stamps/`; `place_stamp {mapId, x, y, name}` pastes it on a map with the same tileset (it replaces the rectangle, never clips, no rotate/mirror); `list_stamps` shows them.
+
+## Reviewing your changes
+After bulk painting or generation, run `render_diff {mapId}`: it compares the map with the backup taken before this session's first edit (or `against: {session}` / `{changeset}`) and returns a PNG of the current map with changed cells outlined yellow and added or moved events outlined green, plus a text list of the first 30 changed cells and event ids. Check that only the area you meant to touch is outlined.
 
 ## Connecting maps
 Use `connect_maps` instead of hand-writing Transfer Player events:
