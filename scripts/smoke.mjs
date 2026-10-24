@@ -410,6 +410,10 @@ await call("get_record", { type: "actors", id: 1 }, (t) => t.includes("Harold") 
   await expectError("commit_changeset with nothing open errors", "commit_changeset", {}, "No changeset is open");
 }
 
+// procedural generation: a dungeon on the fixture tileset (profile suggested from its data)
+await call("generate_map", { kind: "dungeon", create: { name: "Generated", width: 30, height: 20, tilesetId: 1 }, seed: 1 },
+  (t) => t.includes('"reachable"'));
+
 await call("playtest_start", { mode: "browser", port: 8391 }, (t) => t.includes("http://127.0.0.1:8391"));
 const res = await fetch("http://127.0.0.1:8391/data/System.json");
 console.log(`${res.ok ? "PASS" : "FAIL"} http fetch of data/System.json (${res.status})`);

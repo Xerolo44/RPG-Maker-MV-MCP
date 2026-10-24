@@ -17,7 +17,7 @@ interface MapInfo {
   scrollY?: number;
 }
 
-interface MvEvent {
+export interface MvEvent {
   id: number;
   name: string;
   x: number;
@@ -26,7 +26,7 @@ interface MvEvent {
   pages: unknown[];
 }
 
-interface MvMap {
+export interface MvMap {
   width: number;
   height: number;
   data: number[];
@@ -134,7 +134,7 @@ export async function insertEventCommands(
   return { inserted: commands.length, at: pos, listLength: page.list.length, page: pageIndex };
 }
 
-function blankMap(name: string, width: number, height: number, tilesetId: number): MvMap {
+export function blankMap(name: string, width: number, height: number, tilesetId: number): MvMap {
   return {
     autoplayBgm: false,
     autoplayBgs: false,
@@ -161,6 +161,33 @@ function blankMap(name: string, width: number, height: number, tilesetId: number
     data: new Array(width * height * 6).fill(0),
     events: [null],
   };
+}
+
+/**
+ * Register a new map: pick the next free id, add it to MapInfos.json (last in the editor order, scrolled
+ * to its centre) and write the map file. Returns the new map id. Used by create_map and generate_map.
+ */
+export async function addMapToProject(
+  project: Project,
+  info: { name: string; width: number; height: number; parentId: number },
+  map: MvMap
+): Promise<number> {
+  const infosFile = project.dataFile("MapInfos.json");
+  const infos = await project.readJson<({ id: number; order: number } | null)[]>(infosFile);
+  const id = infos.length;
+  const maxOrder = Math.max(0, ...infos.filter((m) => m != null).map((m) => m!.order ?? 0));
+  infos.push({
+    id,
+    expanded: false,
+    name: info.name,
+    order: maxOrder + 1,
+    parentId: info.parentId,
+    scrollX: (info.width * 48) / 2,
+    scrollY: (info.height * 48) / 2,
+  } as never);
+  await project.writeJson(project.mapFile(id), map);
+  await project.writeJson(infosFile, infos);
+  return id;
 }
 
 export function registerMapTools(server: McpServer, project: Project): void {
@@ -434,21 +461,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
           throw err;
         }
       }
-      const infosFile = project.dataFile("MapInfos.json");
-      const infos = await project.readJson<({ id: number; order: number } | null)[]>(infosFile);
-      const id = infos.length;
-      const maxOrder = Math.max(0, ...infos.filter((m) => m != null).map((m) => m!.order ?? 0));
-      infos.push({
-        id,
-        expanded: false,
-        name,
-        order: maxOrder + 1,
-        parentId,
-        scrollX: (width * 48) / 2,
-        scrollY: (height * 48) / 2,
-      } as never);
-      await project.writeJson(project.mapFile(id), newMap);
-      await project.writeJson(infosFile, infos);
+      const id = await addMapToProject(project, { name, width, height, parentId }, newMap);
       return textResult({ created: { mapId: id, name, width, height, tilesetId, filled: fill !== undefined } });
     })
   );
