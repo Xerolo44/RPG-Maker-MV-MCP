@@ -104,23 +104,86 @@ test("nested conditional inside a choice branch uses the right indent", () => {
   assert.deepEqual(sim(list, { choices: [1] }, freshState({ switches: { 3: true } })).messages, ["B chosen", "done"]);
 });
 
-test("variable arithmetic: add, multiply, and divide with integer truncation", () => {
+test("variable arithmetic: add, multiply, and divide with floored integers", () => {
   const list = [
     c(122, 0, 1, 1, 0, 0, 7), // v1 = 7
     c(122, 0, 1, 1, 1, 0, 5), // v1 += 5 -> 12
     c(122, 0, 1, 1, 3, 0, 3), // v1 *= 3 -> 36
     c(122, 0, 1, 1, 2, 0, 6), // v1 -= 6 -> 30
     c(122, 0, 2, 2, 0, 1, 1), // v2 = v1 -> 30
-    c(122, 0, 2, 2, 4, 0, 7), // v2 /= 7 -> 4 (4.28 truncated)
+    c(122, 0, 2, 2, 4, 0, 7), // v2 /= 7 -> 4 (4.28 floored)
     c(122, 0, 3, 3, 0, 0, -7),
-    c(122, 0, 3, 3, 4, 0, 2), // -3.5 truncated toward zero
+    c(122, 0, 3, 3, 4, 0, 2), // -3.5 floors to -4 (the engine's setValue floors; truncation would give -3)
     c(122, 0, 4, 4, 0, 0, 10),
     c(122, 0, 4, 4, 5, 0, 4), // 10 % 4
     END,
   ];
   const t = sim(list);
-  assert.deepEqual(t.finalState.variables, { 1: 30, 2: 4, 3: -3, 4: 2 });
+  assert.deepEqual(t.finalState.variables, { 1: 30, 2: 4, 3: -4, 4: 2 });
   assert.ok(t.changes.includes("variable 1 → 36"));
+});
+
+test("variable values are floored, not truncated, for negative quotients and fractional constants", () => {
+  const t = sim([c(122, 0, 1, 1, 0, 0, -7), c(122, 0, 1, 1, 4, 0, 2), c(122, 0, 2, 2, 0, 0, -2.7), END]);
+  assert.deepEqual(t.finalState.variables, { 1: -4, 2: -3 });
+});
+
+test("a single-id change keeps the per-id format", () => {
+  const t = sim([c(121, 0, 7, 7, 0), c(122, 0, 3, 3, 1, 0, 4), END]);
+  assert.deepEqual(t.changes, ["switch 7 → ON", "variable 3 → 4"]);
+});
+
+test("a range is summarised as one changes entry per command", () => {
+  const t = sim([c(121, 0, 3, 9, 0), c(122, 0, 1, 3, 1, 0, 2), c(122, 0, 1, 3, 4, 0, 0), END]);
+  assert.deepEqual(t.changes, ["switches 3..9 → ON", "variables 1..3 += 2", "variables 1..3 unchanged (division by zero)"]);
+  assert.deepEqual(t.finalState.variables, { 1: 2, 2: 2, 3: 2 });
+});
+
+test("the operand is evaluated once: a variable operand inside its own range is read once", () => {
+  const t = sim([c(122, 0, 2, 2, 0, 0, 1), c(122, 0, 1, 3, 1, 1, 2), END]); // v2 = 1; v1..v3 += v2
+  assert.deepEqual(t.finalState.variables, { 1: 1, 2: 2, 3: 1 });
+});
+
+test("item id 0 or negative is unsupported and not applied", () => {
+  const t = sim([c(126, 0, 0, 0, 0, 1), c(126, 0, -2, 0, 0, 1), END]);
+  assert.deepEqual(t.unsupported.map((u) => [u.index, u.code]), [[0, 126], [1, 126]]);
+  assert.match(t.unsupported[0].message, /item id/);
+  assert.deepEqual(t.finalState.items, {});
+});
+
+test("a range command inside an infinite loop yields a bounded trace", () => {
+  const list = [c(112, 0), c(122, 1, 1, 1000, 1, 0, 1), c(121, 1, 1, 1000, 0), c(413, 0), END];
+  const t = sim(list);
+  assert.equal(t.ended, "stepLimit");
+  assert.ok(JSON.stringify(t).length < 1_000_000, `trace is ${JSON.stringify(t).length} bytes`);
+  assert.equal(t.changes.length, 2000);
+  assert.ok(t.omitted && t.omitted.changes > 0);
+  assert.equal(t.omitted.messages, 0);
+  assert.equal(t.omitted.unsupported, 0);
+  // 10000 steps = 112 once, then 3333 passes of (122, 121, 413): one summary entry per range command
+  assert.equal(t.changes.length + t.omitted.changes, 2 * 3333);
+  assert.equal(t.finalState.variables[1], 3333);
+  assert.equal(t.finalState.variables[1000], 3333);
+  assert.equal(t.finalState.switches[500], true);
+});
+
+test("a message-emitting infinite loop is capped and finalState stays exact", () => {
+  const list = [c(112, 0), c(401, 1, "again"), c(125, 1, 0, 0, 1), c(413, 0), END];
+  const t = sim(list);
+  assert.equal(t.ended, "stepLimit");
+  assert.equal(t.messages.length, 2000);
+  assert.ok(t.omitted.messages > 0);
+  // 112 once, then 3333 passes of (401, 125, 413)
+  assert.equal(t.messages.length + t.omitted.messages, 3333);
+  assert.equal(t.finalState.gold, 3333);
+  assert.equal(t.changes.length + t.omitted.changes, 3333);
+});
+
+test("unsupported entries are capped too", () => {
+  const t = sim([c(112, 0), c(355, 1, "x"), c(413, 0), END]);
+  assert.equal(t.unsupported.length, 2000);
+  assert.equal(t.unsupported.length + t.omitted.unsupported, 5000);
+  assert.equal(sim([c(401, 0, "hi"), END]).omitted, undefined);
 });
 
 test("division and modulo by zero leave the variable unchanged and are noted", () => {
@@ -266,7 +329,8 @@ test("random operand is deterministic for a fixed seed", () => {
   for (const id of [1, 2, 3]) {
     assert.ok(a.finalState.variables[id] >= 1 && a.finalState.variables[id] <= 100);
   }
-  assert.equal(new Set(Object.values(a.finalState.variables)).size > 1, true);
+  // one draw per command: every variable in the range gets the same value
+  assert.equal(new Set(Object.values(a.finalState.variables)).size, 1);
   const other = sim(list, { seed: 43 });
   assert.notDeepEqual(other.finalState.variables, a.finalState.variables);
   assert.deepEqual(sim(list).finalState.variables, sim(list, { seed: 0 }).finalState.variables);

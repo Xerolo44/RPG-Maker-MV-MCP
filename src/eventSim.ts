@@ -33,10 +33,14 @@ export interface SimTrace {
   unsupported: { index: number; code: number; message: string }[];
   ended: "end" | "exit" | "transfer" | "stepLimit" | "unsupported";
   finalState: SimState;
+  /** Entries dropped from messages, changes and unsupported once each reached MAX_TRACE_ENTRIES; only present when something was dropped. finalState stays exact. */
+  omitted?: { changes: number; messages: number; unsupported: number };
 }
 
 export const MAX_STEPS = 10000;
 export const MAX_COMMON_EVENT_DEPTH = 8;
+/** Longest messages, changes and unsupported list in a trace. */
+export const MAX_TRACE_ENTRIES = 2000;
 /** Longest switch/variable range one command may touch. */
 const MAX_RANGE = 1000;
 const MAX_ITEMS = 99;
@@ -147,8 +151,14 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
   let nextAnswer = 0;
   let steps = 0;
 
+  const omitted = { changes: 0, messages: 0, unsupported: 0 };
+  const emit = <T>(key: keyof typeof omitted, list: T[], entry: T): void => {
+    if (list.length < MAX_TRACE_ENTRIES) list.push(entry);
+    else omitted[key]++;
+  };
+  const change = (text: string): void => emit("changes", trace.changes, text);
   const note = (index: number, code: number, message: string): void => {
-    trace.unsupported.push({ index, code, message });
+    emit("unsupported", trace.unsupported, { index, code, message });
   };
 
   /** Reads `p[i]` as a variable id (type 1) or the value itself (type 0). */
@@ -172,15 +182,21 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     if (type === 2 && (!isInt(p[4]) || !isInt(p[5]))) return note(index, 122, "malformed Control Variables random range");
     if ((type === 0 || type === 1) && operand(type, p[4]) === undefined) return note(index, 122, "malformed Control Variables operand");
     if (type !== 0 && type !== 1 && type !== 2) return note(index, 122, "malformed Control Variables operand type");
+    // The operand is evaluated once for the whole range, as the engine does.
+    let value: number;
+    if (type === 2) {
+      const lo = Math.min(p[4] as number, p[5] as number);
+      const hi = Math.max(p[4] as number, p[5] as number);
+      value = lo + Math.floor(rng() * (hi - lo + 1));
+    } else {
+      value = operand(type, p[4])!;
+    }
+    const label = ids.length === 1 ? `variable ${ids[0]}` : `variables ${ids[0]}..${ids[ids.length - 1]}`;
+    if ((op === 4 || op === 5) && value === 0) {
+      change(`${label} unchanged (${op === 4 ? "division" : "modulo"} by zero)`);
+      return;
+    }
     for (const id of ids) {
-      let value: number;
-      if (type === 2) {
-        const lo = Math.min(p[4] as number, p[5] as number);
-        const hi = Math.max(p[4] as number, p[5] as number);
-        value = lo + Math.floor(rng() * (hi - lo + 1));
-      } else {
-        value = operand(type, p[4])!;
-      }
       const old = s.variables[id] ?? 0;
       let next: number;
       switch (op) {
@@ -188,16 +204,13 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
         case 1: next = old + value; break;
         case 2: next = old - value; break;
         case 3: next = old * value; break;
-        default:
-          if (value === 0) {
-            trace.changes.push(`variable ${id} unchanged (${op === 4 ? "division" : "modulo"} by zero)`);
-            continue;
-          }
-          next = op === 4 ? old / value : old % value;
+        case 4: next = old / value; break;
+        default: next = old % value;
       }
-      s.variables[id] = Math.trunc(next);
-      trace.changes.push(`variable ${id} → ${s.variables[id]}`);
+      s.variables[id] = Math.floor(next); // the engine's Game_Variables.setValue floors numbers
+      if (ids.length === 1) change(`variable ${id} → ${s.variables[id]}`);
     }
+    if (ids.length > 1) change(`${label} ${["=", "+=", "-=", "*=", "/=", "%="][op]} ${value}`);
   }
 
   function run(rawList: unknown, depth: number): Signal {
@@ -218,7 +231,7 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           note(index, isInt(p[0]) ? p[0] : MALFORMED, "malformed command (not an object with numeric code and indent and an array of parameters)");
           break;
         case 401:
-          if (typeof p[0] === "string") trace.messages.push(p[0]);
+          if (typeof p[0] === "string") emit("messages", trace.messages, p[0]);
           else note(index, 401, "malformed message text");
           break;
         case 102: {
@@ -291,10 +304,9 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
         case 121: {
           const ids = range(p[0], p[1]);
           if (!ids || (p[2] !== 0 && p[2] !== 1)) { note(index, 121, "malformed Control Switches parameters"); break; }
-          for (const id of ids) {
-            s.switches[id] = p[2] === 0;
-            trace.changes.push(`switch ${id} → ${p[2] === 0 ? "ON" : "OFF"}`);
-          }
+          for (const id of ids) s.switches[id] = p[2] === 0;
+          const on = p[2] === 0 ? "ON" : "OFF";
+          change(ids.length === 1 ? `switch ${ids[0]} → ${on}` : `switches ${ids[0]}..${ids[ids.length - 1]} → ${on}`);
           break;
         }
         case 122:
@@ -306,22 +318,22 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
             break;
           }
           s.selfSwitches[p[0]] = p[1] === 0;
-          trace.changes.push(`self switch ${p[0]} → ${p[1] === 0 ? "ON" : "OFF"}`);
+          change(`self switch ${p[0]} → ${p[1] === 0 ? "ON" : "OFF"}`);
           break;
         }
         case 125: {
           const amount = p[0] === 0 || p[0] === 1 ? operand(p[1], p[2]) : undefined;
           if (amount === undefined) { note(index, 125, "malformed Change Gold parameters"); break; }
           s.gold = Math.max(0, s.gold + (p[0] === 0 ? amount : -amount));
-          trace.changes.push(`gold ${p[0] === 0 ? "+" : "-"}${amount} → ${s.gold}`);
+          change(`gold ${p[0] === 0 ? "+" : "-"}${amount} → ${s.gold}`);
           break;
         }
         case 126: {
-          const amount = isInt(p[0]) && (p[1] === 0 || p[1] === 1) ? operand(p[2], p[3]) : undefined;
-          if (amount === undefined || !isInt(p[0])) { note(index, 126, "malformed Change Items parameters"); break; }
+          const amount = isInt(p[0]) && p[0] >= 1 && (p[1] === 0 || p[1] === 1) ? operand(p[2], p[3]) : undefined;
+          if (amount === undefined || !isInt(p[0])) { note(index, 126, "malformed Change Items parameters (the item id must be an integer of at least 1)"); break; }
           const count = Math.min(MAX_ITEMS, Math.max(0, (s.items[p[0]] ?? 0) + (p[1] === 0 ? amount : -amount)));
           s.items[p[0]] = count;
-          trace.changes.push(`item ${p[0]} ${p[1] === 0 ? "+" : "-"}${amount} → ${count}`);
+          change(`item ${p[0]} ${p[1] === 0 ? "+" : "-"}${amount} → ${count}`);
           break;
         }
         case 201: {
@@ -334,7 +346,7 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           return "transfer";
         }
         case 356:
-          if (typeof p[0] === "string") trace.changes.push(`plugin: ${p[0]}`);
+          if (typeof p[0] === "string") change(`plugin: ${p[0]}`);
           else note(index, 356, "malformed Plugin Command parameters");
           break;
         case 355:
@@ -349,6 +361,7 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
 
   const signal = run(list, 0);
   trace.ended = signal ?? "end";
+  if (omitted.changes + omitted.messages + omitted.unsupported > 0) trace.omitted = omitted;
   return trace;
 }
 
