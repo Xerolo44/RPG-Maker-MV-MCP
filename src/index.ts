@@ -29,7 +29,7 @@ import { parseProfile, type Group } from "./profiles.js";
 async function main(): Promise<void> {
   const server = new McpServer({
     name: "rpgmaker-mv-mcp",
-    version: "0.3.0",
+    version: "0.4.0",
   });
 
   const project = new Project();
