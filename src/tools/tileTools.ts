@@ -29,7 +29,7 @@ import {
   tileIndexAt,
 } from "../tiles.js";
 
-interface MvTileset {
+export interface MvTileset {
   id: number;
   name: string;
   mode: number;
