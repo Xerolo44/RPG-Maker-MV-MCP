@@ -12,6 +12,7 @@ MESSAGES
 FLOW CONTROL
 111 Conditional Branch: params vary by first slot — [0, switchId, 0=ON/1=OFF] switch; [1, varId, 0, value, op(0:=,1:>=,2:<=,3:>,4:<,5:!=)] variable vs constant; [2, "A"|"B"|"C"|"D", 0=ON/1=OFF] self switch; [7, gold, op(0:>=,1:<=,2:<)] gold; [8, itemId] party has item — else branch 411, end 412
 112 Loop (end 413 Repeat Above), 113 Break Loop, 115 Exit Event Processing
+108 Comment: ["first line"] — further lines follow as 408 ["line"]; the engine ignores comments
 117 Common Event: [commonEventId]
 118 Label: ["name"], 119 Jump to Label: ["name"]
 230 Wait: [frames] (60 = 1 second)
@@ -23,10 +24,10 @@ GAME PROGRESSION
 124 Control Timer: [0=start/1=stop, seconds]
 
 PARTY
-125 Change Gold: [operation(0 add,1 sub), operandType(0 const,1 var), value]
-126 Change Items: [itemId, operation, operandType, value]
-127/128 Change Weapons/Armors: [id, op, operandType, value, includeEquip]
-129 Change Party Member: [actorId, 0=add/1=remove, initialize]
+125 Change Gold: [operation(0 add,1 sub), operandType(0 const,1 var), value] — with operandType 1 the value is a variable id
+126 Change Items: [itemId, operation(0 add,1 remove), operandType(0 const,1 var), value]
+127/128 Change Weapons/Armors: [id, op(0 add,1 remove), operandType(0 const,1 var), value, includeEquip] — includeEquip true also takes equipped copies when removing
+129 Change Party Member: [actorId, 0=add/1=remove, initialize] — initialize (1) resets the actor to their database start when adding; ignored when removing
 
 ACTOR
 311 Change HP: [actorType(0 fixed,1 var), actorId, op, operandType, value, allowDeath]
@@ -56,7 +57,7 @@ AUDIO / PICTURES
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
-301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — win branch 601, escape 602, lose 603, end 604
+301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — a block like 102/111: optional branches 601 If Win, 602 If Escape (only reachable with canEscape), 603 If Lose (only reachable with canLose), each followed by its body one indent deeper, closed by 604 End of Battle
 302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
 351 Open Menu Screen, 352 Open Save Screen, 353 Game Over, 354 Return to Title

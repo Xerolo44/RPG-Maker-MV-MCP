@@ -1,8 +1,12 @@
 // Compiles a nested dialogue tree (say / choices / if / switches / transfer, plus cutscene presentation
-// nodes: screen effects, audio, pictures, animations and move routes) into an RPG Maker MV event command
-// list with correct indents and block terminators.
+// nodes: screen effects, audio, pictures, animations and move routes, and game-flow nodes: battles, shops,
+// party and inventory changes, labels, scenes) into an RPG Maker MV event command list with correct
+// indents and block terminators.
 import { z } from "zod";
 import { cmd, type Cmd } from "./commandList.js";
+// eventTemplates imports messageCommands from this module: the cycle is safe because both sides only use
+// each other's exports inside functions, never while their module bodies run.
+import { shopCommands } from "./eventTemplates.js";
 
 export const MAX_DIALOGUE_DEPTH = 8;
 export const MAX_CHOICES = 6;
@@ -61,8 +65,37 @@ export type PresentationNode =
   | { balloon: { target: Target; balloonId: number; wait?: boolean } }
   | { moveRoute: { target: Target; steps: RouteStep[]; repeat?: boolean; skippable?: boolean; wait?: boolean } };
 
+export type ShopGood = { type: "item" | "weapon" | "armor"; id: number; price?: number };
+
+export type FlowNode =
+  | {
+      battle: {
+        troopId: number;
+        canEscape?: boolean;
+        canLose?: boolean;
+        onWin?: DialogueNode[];
+        onEscape?: DialogueNode[];
+        onLose?: DialogueNode[];
+      };
+    }
+  | { shop: { goods: ShopGood[]; purchaseOnly?: boolean } }
+  | { callCommon: number }
+  | { label: string }
+  | { jump: string }
+  | { exit: true }
+  | { comment: string | string[] }
+  | { gold: number }
+  | { item: { kind: "item" | "weapon" | "armor"; id: number; count: number } }
+  | { party: { actorId: number; action: "add" | "remove"; initialize?: boolean } }
+  | { learnSkill: { actorId: number; skillId: number; forget?: boolean } }
+  | { recoverAll: true }
+  | { nameInput: { actorId: number; maxChars: number } }
+  | { plugin: string }
+  | { scene: "menu" | "save" | "gameOver" | "title" };
+
 export type DialogueNode =
   | PresentationNode
+  | FlowNode
   | { say: string | string[]; face?: { name: string; index: number }; background?: 0 | 1 | 2; position?: 0 | 1 | 2 }
   | { choices: { label: string; then?: DialogueNode[] }[]; cancel?: "disallow" | "branch" | number }
   | { if: Condition; then?: DialogueNode[]; else?: DialogueNode[] }
@@ -135,7 +168,7 @@ const STEP_HELP =
 const routeStepUnion = z.union(
   [
     z.enum(Object.keys(ROUTE_CODES) as [keyof typeof ROUTE_CODES, ...(keyof typeof ROUTE_CODES)[]]),
-    z.object({ jump: z.object({ x: z.number().int(), y: z.number().int() }).strict() }).strict(),
+    z.object({ jump: z.object({ x: intIn(-1000, 1000), y: intIn(-1000, 1000) }).strict() }).strict(),
     z.object({ wait: intIn(1, 999) }).strict(),
     z.object({ switchOn: z.number().int().min(1) }).strict(),
     z.object({ switchOff: z.number().int().min(1) }).strict(),
@@ -226,13 +259,118 @@ const presentationSchemas = {
           skippable: optionalBool,
           wait: optionalBool,
         })
-        .strict(),
+        .strict()
+        .superRefine((m, ctx) => {
+          if (m.repeat === true && m.wait === true) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["wait"],
+              message: "a repeating route never finishes, so the event cannot wait for it (use wait: false, or omit wait)",
+            });
+          }
+        }),
     })
     .strict(),
 } as const;
 
-type PresentationKey = keyof typeof presentationSchemas;
-const PRESENTATION_KEYS = Object.keys(presentationSchemas) as PresentationKey[];
+// Game-flow nodes without nested bodies (battle, which nests, is handled separately).
+
+const GOODS_KINDS = ["item", "weapon", "armor"] as const;
+const SCENE_CODES = { menu: 351, save: 352, gameOver: 353, title: 354 } as const;
+const MAX_GOLD = 99999999; // $gameParty.maxGold()
+const MAX_ITEM_COUNT = 99; // default $gameParty.maxItems(); the editor's constant operand stops there too
+// A single event-command line (label, plugin command): no NUL, escapes or line breaks.
+const singleLine = (what: string) => z.string().regex(/^[^\u0000-\u001f\u007f]*$/, `${what} must not contain control characters (newlines, NUL, ...)`);
+const nonEmptyLine = (what: string) => singleLine(what).min(1, `${what} must not be empty`);
+const actorId = z.number().int().min(1);
+
+const commentSchema = z
+  .union([z.string(), z.array(z.string())], {
+    errorMap: (issue, ctx) =>
+      issue.code === "invalid_union" ? { message: "comment must be a string or an array of strings" } : { message: ctx.defaultError },
+  })
+  .superRefine((value, ctx) => {
+    const lines = typeof value === "string" ? [value] : value;
+    const fail = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    if (lines.length === 0) return fail("comment needs at least one line");
+    if (lines.every((l) => l === "")) return fail("comment must not be empty");
+    // line breaks split the comment into 408 rows and tabs are fine; other control characters are not
+    if (lines.some((l) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(l))) {
+      fail("comment must not contain control characters (other than line breaks)");
+    }
+  });
+
+const flowSchemas = {
+  shop: z
+    .object({
+      shop: z
+        .object({
+          goods: z
+            .array(z.object({ type: z.enum(GOODS_KINDS), id: z.number().int().min(1), price: z.number().int().min(0).optional() }).strict())
+            .min(1, "shop needs at least 1 good")
+            .max(40, "shop allows at most 40 goods"),
+          purchaseOnly: optionalBool,
+        })
+        .strict(),
+    })
+    .strict(),
+  callCommon: z.object({ callCommon: z.number().int().min(1) }).strict(),
+  label: z.object({ label: nonEmptyLine("label") }).strict(),
+  jump: z.object({ jump: nonEmptyLine("jump label") }).strict(),
+  exit: z.object({ exit: z.literal(true) }).strict(),
+  comment: z.object({ comment: commentSchema }).strict(),
+  gold: z
+    .object({ gold: intIn(-MAX_GOLD, MAX_GOLD).refine((n) => n !== 0, "gold must not be 0 (positive gives gold, negative takes it)") })
+    .strict(),
+  item: z
+    .object({
+      item: z
+        .object({
+          kind: z.enum(GOODS_KINDS),
+          id: z.number().int().min(1),
+          count: intIn(-MAX_ITEM_COUNT, MAX_ITEM_COUNT).refine((n) => n !== 0, "count must not be 0 (positive adds, negative removes)"),
+        })
+        .strict(),
+    })
+    .strict(),
+  party: z.object({ party: z.object({ actorId, action: z.enum(["add", "remove"]), initialize: optionalBool }).strict() }).strict(),
+  learnSkill: z.object({ learnSkill: z.object({ actorId, skillId: z.number().int().min(1), forget: optionalBool }).strict() }).strict(),
+  recoverAll: z.object({ recoverAll: z.literal(true) }).strict(),
+  nameInput: z.object({ nameInput: z.object({ actorId, maxChars: intIn(1, 16) }).strict() }).strict(),
+  plugin: z.object({ plugin: nonEmptyLine("plugin command") }).strict(),
+  scene: z.object({ scene: z.enum(["menu", "save", "gameOver", "title"]) }).strict(),
+} as const;
+
+// battle: the head fields are shared by the recursive node schema (branch bodies are node arrays) and the
+// compiler's own check (the branch bodies are checked as they are compiled).
+const battleHead = {
+  troopId: z.number().int().min(1),
+  canEscape: optionalBool,
+  canLose: optionalBool,
+};
+
+function battleRules(b: { canEscape?: boolean; canLose?: boolean; onEscape?: unknown[]; onLose?: unknown[] }, ctx: z.RefinementCtx): void {
+  // An escape / lose branch the battle can never reach is an authoring mistake, not something to emit silently.
+  if (b.onEscape && b.onEscape.length > 0 && b.canEscape !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["onEscape"], message: "onEscape needs canEscape: true, otherwise that branch can never run" });
+  }
+  if (b.onLose && b.onLose.length > 0 && b.canLose !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["onLose"], message: "onLose needs canLose: true, otherwise that branch can never run" });
+  }
+}
+
+const battleCheckSchema = z
+  .object({
+    battle: z
+      .object({ ...battleHead, onWin: z.array(z.unknown()).optional(), onEscape: z.array(z.unknown()).optional(), onLose: z.array(z.unknown()).optional() })
+      .strict()
+      .superRefine(battleRules),
+  })
+  .strict();
+
+const leafSchemas = { ...presentationSchemas, ...flowSchemas } as const;
+type LeafKey = keyof typeof leafSchemas;
+const LEAF_KEYS = Object.keys(leafSchemas) as LeafKey[];
 
 const nodeSchema: z.ZodType<DialogueNode, z.ZodTypeDef, unknown> = z.lazy(() =>
   z.union([
@@ -275,7 +413,21 @@ const nodeSchema: z.ZodType<DialogueNode, z.ZodTypeDef, unknown> = z.lazy(() =>
       })
       .strict(),
     z.object({ raw: z.array(rawCmdSchema).min(1, "raw must have at least one command") }).strict(),
+    z
+      .object({
+        battle: z
+          .object({
+            ...battleHead,
+            onWin: z.array(nodeSchema).optional(),
+            onEscape: z.array(nodeSchema).optional(),
+            onLose: z.array(nodeSchema).optional(),
+          })
+          .strict()
+          .superRefine(battleRules),
+      })
+      .strict(),
     ...Object.values(presentationSchemas),
+    ...Object.values(flowSchemas),
   ]),
 );
 
@@ -285,13 +437,14 @@ function depthOf(nodes: readonly DialogueNode[] | undefined): number {
     let d = 1;
     if ("choices" in n) d += Math.max(0, ...n.choices.map((c) => depthOf(c.then)));
     else if ("if" in n) d += Math.max(depthOf(n.then), depthOf(n.else));
+    else if ("battle" in n) d += Math.max(depthOf(n.battle.onWin), depthOf(n.battle.onEscape), depthOf(n.battle.onLose));
     max = Math.max(max, d);
   }
   return max;
 }
 
 const depthMessage = (depth: number) =>
-  `Dialogue tree is nested ${depth} levels deep (choices/if bodies count as a level); the maximum is ${MAX_DIALOGUE_DEPTH}.`;
+  `Dialogue tree is nested ${depth} levels deep (choices/if/battle bodies count as a level); the maximum is ${MAX_DIALOGUE_DEPTH}.`;
 
 /** A single dialogue node, recursively validated; nesting deeper than 8 levels is rejected. */
 export const dialogueNodeSchema: z.ZodType<DialogueNode, z.ZodTypeDef, unknown> = nodeSchema.superRefine((node, ctx) => {
@@ -334,15 +487,39 @@ function routeCommand(step: RouteStep): { code: number; parameters: unknown[]; i
 const AUDIO_CODES = { bgm: 241, bgs: 245, me: 249, se: 250 } as const;
 const BLEND_MODES = { normal: 0, add: 1, multiply: 2, screen: 3 } as const;
 
-/** Validates a presentation node against its schema (so direct callers get the same limits) and compiles it. */
-function presentationCommands(n: PresentationNode, indent: number): Cmd[] {
-  const key = PRESENTATION_KEYS.find((k) => k in n);
+type LeafNode = Exclude<PresentationNode | FlowNode, { battle: unknown }>;
+
+/** Validates a node without nested bodies against its schema (so direct callers get the same limits) and compiles it. */
+function leafCommands(n: LeafNode, indent: number): Cmd[] {
+  const key = LEAF_KEYS.find((k) => k in n);
   if (key === undefined) throw new Error(`Unknown dialogue node: ${JSON.stringify(n)}`);
-  const checked = presentationSchemas[key].safeParse(n);
+  const checked = leafSchemas[key].safeParse(n);
   if (!checked.success) {
     const detail = checked.error.issues.map((i) => `${i.path.join(".") || key}: ${i.message}`).join("; ");
     throw new Error(`Invalid ${key} node: ${detail}`);
   }
+  if ("shop" in n) return shopCommands(n.shop.goods, n.shop.purchaseOnly ?? false, indent);
+  if ("callCommon" in n) return [cmd(117, indent, n.callCommon)];
+  if ("label" in n) return [cmd(118, indent, n.label)];
+  if ("jump" in n) return [cmd(119, indent, n.jump)];
+  if ("exit" in n) return [cmd(115, indent)];
+  if ("comment" in n) {
+    const lines = (Array.isArray(n.comment) ? n.comment : [n.comment]).flatMap((l) => l.split(/\r?\n/));
+    return lines.map((line, i) => cmd(i === 0 ? 108 : 408, indent, line));
+  }
+  if ("gold" in n) return [cmd(125, indent, n.gold > 0 ? 0 : 1, 0, Math.abs(n.gold))];
+  if ("item" in n) {
+    const { kind, id, count } = n.item;
+    const op = count > 0 ? 0 : 1;
+    const amount = Math.abs(count);
+    return [kind === "item" ? cmd(126, indent, id, op, 0, amount) : cmd(kind === "weapon" ? 127 : 128, indent, id, op, 0, amount, false)];
+  }
+  if ("party" in n) return [cmd(129, indent, n.party.actorId, n.party.action === "add" ? 0 : 1, n.party.initialize ? 1 : 0)];
+  if ("learnSkill" in n) return [cmd(318, indent, 0, n.learnSkill.actorId, n.learnSkill.forget ? 1 : 0, n.learnSkill.skillId)];
+  if ("recoverAll" in n) return [cmd(314, indent, 0, 0)];
+  if ("nameInput" in n) return [cmd(303, indent, n.nameInput.actorId, n.nameInput.maxChars)];
+  if ("plugin" in n) return [cmd(356, indent, n.plugin)];
+  if ("scene" in n) return [cmd(SCENE_CODES[n.scene], indent)];
   if ("wait" in n) return [cmd(230, indent, n.wait)];
   if ("fade" in n) return [cmd(n.fade === "out" ? 221 : 222, indent)];
   if ("tint" in n) {
@@ -386,7 +563,8 @@ function presentationCommands(n: PresentationNode, indent: number): Cmd[] {
     list: [...m.steps.map(routeCommand), { code: 0, parameters: [] }],
     repeat: m.repeat ?? false,
     skippable: m.skippable ?? false,
-    wait: m.wait ?? true,
+    // A repeating route never finishes, so waiting for it would freeze the event: default to not waiting.
+    wait: m.wait ?? m.repeat !== true,
   };
   // The 505 rows repeat the route commands (without the terminator) as separate objects.
   return [cmd(205, indent, resolveTarget(m.target), route), ...m.steps.map((step) => cmd(505, indent, routeCommand(step)))];
@@ -440,8 +618,22 @@ function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number
       out.push(cmd(201, indent, 0, t.mapId, t.x, t.y, t.direction ?? 0, t.fade ?? 0));
     } else if ("raw" in n) {
       for (const c of n.raw) out.push({ code: c.code, indent: (c.indent ?? 0) + indent, parameters: c.parameters ?? [] });
+    } else if ("battle" in n) {
+      const checked = battleCheckSchema.safeParse(n);
+      if (!checked.success) {
+        const detail = checked.error.issues.map((i) => `${i.path.slice(1).join(".") || "battle"}: ${i.message}`).join("; ");
+        throw new Error(`Invalid battle node: ${detail}`);
+      }
+      const b = n.battle;
+      out.push(cmd(301, indent, 0, b.troopId, b.canEscape ?? false, b.canLose ?? false));
+      for (const [code, body] of [[601, b.onWin], [602, b.onEscape], [603, b.onLose]] as const) {
+        if (body === undefined || body.length === 0) continue;
+        out.push(cmd(code, indent));
+        compileNodes(body, indent + 1, depth + 1, out);
+      }
+      out.push(cmd(604, indent));
     } else {
-      out.push(...presentationCommands(n, indent));
+      out.push(...leafCommands(n, indent));
     }
   }
 }

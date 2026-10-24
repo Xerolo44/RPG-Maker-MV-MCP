@@ -176,9 +176,57 @@ test("moveRoute options and target resolution", () => {
   assert.deepEqual(list[0], cmd(205, 0, 0, { list: [rc(4), { code: 0, parameters: [] }], repeat: true, skippable: true, wait: false }));
 });
 
+/** Every object/array reachable from `value`; fails if the same one is reachable twice (aliasing). */
+const assertNoSharedObjects = (value, label) => {
+  const seen = new Set();
+  const walk = (v) => {
+    if (v === null || typeof v !== "object") return;
+    assert.ok(!seen.has(v), `${label}: the same object is referenced twice: ${JSON.stringify(v)}`);
+    seen.add(v);
+    for (const child of Object.values(v)) walk(child);
+  };
+  walk(value);
+  return seen.size;
+};
+
 test("moveRoute route commands are independent objects (list rows are not aliased to the 505 rows)", () => {
   const list = compiled({ moveRoute: { target: "this", steps: ["up"] } });
   assert.notStrictEqual(list[0].parameters[1].list[0], list[1].parameters[0]);
+  assert.notStrictEqual(list[0].parameters[1].list[0].parameters, list[1].parameters[0].parameters);
+});
+
+test("moveRoute output shares no objects: repeated identical steps and two identical moveRoute nodes", () => {
+  const route = { moveRoute: { target: "this", steps: ["down", "down", { wait: 5 }, { wait: 5 }, { jump: { x: 1, y: 1 } }, { jump: { x: 1, y: 1 } }] } };
+  const single = compiled(route);
+  assert.ok(assertNoSharedObjects(single, "one route") > 20);
+  const twice = valid([route, structuredClone(route)]);
+  assertNoSharedObjects(twice, "two distinct nodes");
+  // the SAME node object listed twice must not alias either
+  const same = valid([route, route]);
+  assertNoSharedObjects(same, "one node object used twice");
+  assert.deepEqual(same.slice(0, single.length), single);
+  assert.deepEqual(same.slice(single.length), single);
+
+  // mutating one output object must not change any other
+  const snapshot = JSON.stringify(same);
+  const firstRow = same[1].parameters[0];
+  firstRow.code = 99;
+  firstRow.parameters.push("x");
+  same[0].parameters[1].list[1].code = 98;
+  same[0].parameters[1].list[2].parameters[0] = 77;
+  same[single.length].parameters[1].repeat = true;
+  const after = JSON.parse(JSON.stringify(same));
+  const expected = JSON.parse(snapshot);
+  expected[1].parameters[0].code = 99;
+  expected[1].parameters[0].parameters.push("x");
+  expected[0].parameters[1].list[1].code = 98;
+  expected[0].parameters[1].list[2].parameters[0] = 77;
+  expected[single.length].parameters[1].repeat = true;
+  assert.deepEqual(after, expected);
+  // and the compiler's input is untouched
+  assert.deepEqual(route.moveRoute.steps, ["down", "down", { wait: 5 }, { wait: 5 }, { jump: { x: 1, y: 1 } }, { jump: { x: 1, y: 1 } }]);
+  // a later compile is unaffected by the mutations
+  assert.deepEqual(compiled(route), single);
 });
 
 test("a moveRoute nested in a choice body is indented with its 505 rows", () => {
@@ -238,16 +286,57 @@ test("moveRoute rejects non-integer jump coordinates, speed 7 and other out-of-r
   accepted({ moveRoute: { target: "this", steps: [{ speed: 6 }, { speed: 1 }, { frequency: 5 }, { jump: { x: -3, y: 0 } }] } });
 });
 
-test("a rejected moveRoute produces no partial output", () => {
-  const tree = [{ say: "before" }, { moveRoute: { target: "this", steps: ["down", { speed: 7 }] } }, { say: "after" }];
-  assert.throws(() => compileDialogue(tree), /speed/);
-  const out = [];
-  try {
-    out.push(...compileDialogue(tree));
-  } catch {
-    /* expected */
-  }
-  assert.deepEqual(out, []);
+test("a rejected moveRoute produces no partial output, even when the invalid node comes after valid siblings", () => {
+  const tree = [{ wait: 5 }, { say: "before" }, { moveRoute: { target: "this", steps: ["down", { speed: 7 }] } }, { say: "after" }];
+  // a valid wait is followed by an invalid moveRoute: compile throws and returns nothing at all
+  let result;
+  assert.throws(() => {
+    result = compileDialogue(tree);
+  }, /speed/);
+  assert.equal(result, undefined);
+  // the same tree without the bad node is fine, so the earlier siblings were valid on their own
+  assert.deepEqual(
+    compileDialogue([tree[0], tree[1], tree[3]]).map((c) => c.code),
+    [230, 101, 401, 101, 401],
+  );
+  // a failing node nested in a choice body (after a valid sibling there) fails the whole tree too
+  let nested;
+  assert.throws(() => {
+    nested = compileDialogue([{ choices: [{ label: "Go", then: [{ wait: 5 }, { moveRoute: { target: "this", steps: [] } }] }] }]);
+  }, /at least 1 step/);
+  assert.equal(nested, undefined);
+});
+
+test("a moveRoute with repeat: true defaults wait to false; repeat: false (or unset) keeps wait true", () => {
+  const params = (m) => compiled({ moveRoute: { target: "this", steps: ["up"], ...m } })[0].parameters[1];
+  assert.equal(params({ repeat: true }).wait, false);
+  assert.equal(params({ repeat: true }).repeat, true);
+  assert.equal(params({ repeat: true, wait: false }).wait, false);
+  assert.equal(params({}).wait, true);
+  assert.equal(params({ repeat: false }).wait, true);
+  assert.equal(params({ repeat: false, wait: false }).wait, false);
+  assert.equal(params({ repeat: false, wait: true }).wait, true);
+});
+
+test("an explicit repeat: true together with wait: true is rejected with a clear message", () => {
+  const message = /a repeating route never finishes, so the event cannot wait for it/;
+  rejected({ moveRoute: { target: "this", steps: ["up"], repeat: true, wait: true } }, message);
+  accepted({ moveRoute: { target: "this", steps: ["up"], repeat: true } });
+  accepted({ moveRoute: { target: "this", steps: ["up"], repeat: true, wait: false } });
+  accepted({ moveRoute: { target: "this", steps: ["up"], repeat: false, wait: true } });
+  assert.throws(() => compileDialogue([{ moveRoute: { target: "this", steps: ["up"], repeat: true, wait: true } }]), /Invalid moveRoute node: moveRoute\.wait: a repeating route/);
+});
+
+test("jump coordinates are capped to -1000..1000", () => {
+  const jump = (x, y) => ({ moveRoute: { target: "this", steps: [{ jump: { x, y } }] } });
+  accepted(jump(1000, -1000));
+  accepted(jump(-1000, 1000));
+  assert.deepEqual(compiled(jump(-1000, 1000))[1].parameters, [rc(14, -1000, 1000)]);
+  rejected(jump(1001, 0), /less than or equal to 1000/);
+  rejected(jump(0, -1001), /greater than or equal to -1000/);
+  rejected(jump(-1001, 0), /greater than or equal to -1000/);
+  rejected(jump(0, 1001), /less than or equal to 1000/);
+  rejected(jump(Number.MAX_SAFE_INTEGER, 0), /less than or equal to 1000/);
 });
 
 test("moveRoute rejects bad targets, extra keys and non-boolean options", () => {

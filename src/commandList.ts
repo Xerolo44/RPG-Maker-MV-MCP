@@ -28,6 +28,7 @@ const BLOCKS: Record<number, Block> = {
   102: { name: "Show Choices", closer: 404, closerName: "End Choices", siblings: [402, 403] },
   111: { name: "Conditional Branch", closer: 412, closerName: "Branch End", siblings: [411] },
   112: { name: "Loop", closer: 413, closerName: "Repeat Above", siblings: [] },
+  301: { name: "Battle Processing", closer: 604, closerName: "End of Battle", siblings: [601, 602, 603] },
 };
 
 const CLOSER_OF = new Map<number, number>(); // closer/sibling code -> opener code

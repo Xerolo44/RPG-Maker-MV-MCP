@@ -139,6 +139,22 @@ const say = (text: string, indent: number): Cmd[] => messageCommands(lines(text)
 const CHANGE_CODE = { item: 126, weapon: 127, armor: 128 } as const;
 const SHOP_TYPE = { item: 0, weapon: 1, armor: 2 } as const;
 
+/**
+ * Shop Processing: 302 for the first good plus one 605 per further good, all at `indent`. A good without
+ * `price` uses the database price (priceType 0); with `price` it uses that price (priceType 1).
+ * Shared by the shop template and the build_dialogue_tree `shop` node.
+ */
+export function shopCommands(
+  goods: { type: "item" | "weapon" | "armor"; id: number; price?: number }[],
+  purchaseOnly: boolean,
+  indent: number,
+): Cmd[] {
+  const row = (g: (typeof goods)[number]): unknown[] => [SHOP_TYPE[g.type], g.id, g.price === undefined ? 0 : 1, g.price ?? 0];
+  const [first, ...rest] = goods;
+  if (first === undefined) throw new Error("A shop needs at least one good.");
+  return [cmd(302, indent, ...row(first), purchaseOnly), ...rest.map((g) => cmd(605, indent, ...row(g)))];
+}
+
 function chest(p: Extract<TemplateParams, { template: "chest" }>): EventPage[] {
   const list = say(p.message ?? "You found treasure!", 0);
   if (p.reward.gold !== undefined) list.push(cmd(125, 0, 0, 0, p.reward.gold));
@@ -192,15 +208,7 @@ function inn(p: Extract<TemplateParams, { template: "inn" }>): EventPage[] {
 }
 
 function shop(p: Extract<TemplateParams, { template: "shop" }>): EventPage[] {
-  const row = (g: (typeof p.goods)[number]): unknown[] => [
-    SHOP_TYPE[g.type],
-    g.id,
-    g.price === undefined ? 0 : 1,
-    g.price ?? 0,
-  ];
-  const [first, ...rest] = p.goods;
-  const list = [cmd(302, 0, ...row(first), p.purchaseOnly ?? false), ...rest.map((g) => cmd(605, 0, ...row(g)))];
-  return [page(list)];
+  return [page(shopCommands(p.goods, p.purchaseOnly ?? false, 0))];
 }
 
 function npc(p: Extract<TemplateParams, { template: "npc" }>): EventPage[] {

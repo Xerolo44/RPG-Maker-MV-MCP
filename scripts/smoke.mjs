@@ -159,6 +159,12 @@ await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
 ] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
 await call("search_map_events", { query: "of course", searchCommands: true },
   (t) => t.includes('"eventId": 2') && t.includes("command 102"));
+// game-flow and cutscene nodes: a battle block, a shop and audio compile into the Guard event
+await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
+  { playAudio: { kind: "bgm", name: "Battle1" } },
+  { battle: { troopId: 1, canEscape: true, onWin: [{ gold: 50 }], onEscape: [{ say: "Phew." }] } },
+  { shop: { goods: [{ type: "item", id: 1 }, { type: "weapon", id: 1, price: 300 }] } },
+] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
 
 // create_event_from_template: a chest on a free tile, then an occupied-tile refusal
 await call("create_event_from_template", { mapId: 1, x: 6, y: 6, template: "chest",
