@@ -108,7 +108,7 @@ export function registerGenerationTools(server: McpServer, project: Project): vo
         "Afterwards: call render_map_image to look at the result (consider showPassability); wire doors to other maps with connect_maps using the returned entrance and exit coordinates; " +
         "fill the chest markers with create_event_from_template or the event tools. A marker occupies its tile: delete it with delete_event before placing a door or chest there, " +
         "or pass allowOverlap (connect_maps) / allowStack (create_event_from_template) to place on top of it. " +
-        "A dungeon needs a map of at least 14x7 (or 7x14) cells; smaller maps are refused with a clear error (caves work from 5x5, though very small caves may fail the minimum floor share). " +
+        "A dungeon needs a map of at least 14x7 (or 7x14) cells; smaller maps are refused with a clear error (caves need roughly 9x9 or more; very small caves may fail the minimum floor share and are refused). " +
         "Limits: decor is best-effort (sparse, only on open floor), and wall faces are a one-row simplification, since many tilesets draw wall sides two or more tiles tall.",
       inputSchema: {
         kind: z.enum(["dungeon", "cave"]),
