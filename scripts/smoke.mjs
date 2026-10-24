@@ -145,6 +145,19 @@ await call("add_dialogue", { mapId: 1, eventId: 2,
   faceName: "Actor1" },
   (t) => t.includes('"inserted": 7') && t.includes('"messageBoxes": 2'));
 
+// build_dialogue_tree: dry run touches nothing, then a choice tree is compiled into the Guard event
+await call("build_dialogue_tree", { tree: [{ say: "Dry run only." }] },
+  (t) => t.includes('"commands": 2') && !t.includes('"inserted"'));
+await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
+  { say: "Will you help?" },
+  { choices: [
+    { label: "Of course", then: [{ setSwitch: { id: 1, value: true } }, { say: "Thanks!" }] },
+    { label: "Not today", then: [{ say: "Pity." }] },
+  ], cancel: "branch" },
+] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
+await call("search_map_events", { query: "of course", searchCommands: true },
+  (t) => t.includes('"eventId": 2') && t.includes("command 102"));
+
 // map creation
 await call("create_map", { name: "Cave", width: 20, height: 15 },
   (t) => t.includes('"mapId": 2'));

@@ -21,6 +21,7 @@ import { registerConnectTools } from "./tools/connectTools.js";
 import { registerBalanceTools } from "./tools/balanceTools.js";
 import { registerLocalizationTools } from "./tools/localizationTools.js";
 import { registerAnalysisTools } from "./tools/analysisTools.js";
+import { registerAuthoringTools } from "./tools/authoringTools.js";
 import { registerKnowledge } from "./knowledge.js";
 import { parseProfile, type Group } from "./profiles.js";
 
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
   if (enabled.has("balance")) registerBalanceTools(server, project);
   if (enabled.has("localization")) registerLocalizationTools(server, project);
   if (enabled.has("analysis")) registerAnalysisTools(server, project);
+  if (enabled.has("authoring")) registerAuthoringTools(server, project);
   registerKnowledge(server, project);
 
   const httpFlag = args.indexOf("--http");

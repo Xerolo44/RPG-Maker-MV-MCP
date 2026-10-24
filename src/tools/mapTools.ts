@@ -4,6 +4,7 @@ import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
 import { TileError, TileSpec, applyPaintOps } from "../tiles.js";
 import { EVENT_COMMAND_REFERENCE } from "../reference.js";
+import { messageCommands } from "../dialogueTree.js";
 import { checkSheetsAvailable, loadTileset, tileSpecSchema } from "./tileTools.js";
 
 interface MapInfo {
@@ -78,7 +79,7 @@ async function readMap(project: Project, mapId: number): Promise<MvMap> {
   return project.readJson<MvMap>(project.mapFile(mapId));
 }
 
-async function insertEventCommands(
+export async function insertEventCommands(
   project: Project,
   mapId: number,
   eventId: number,
@@ -375,13 +376,7 @@ export function registerMapTools(server: McpServer, project: Project): void {
       },
     },
     safe(async ({ mapId, eventId, pageIndex, lines, faceName, faceIndex, background, position }) => {
-      const commands: { code: number; indent: number; parameters: unknown[] }[] = [];
-      for (let i = 0; i < lines.length; i += 4) {
-        commands.push({ code: 101, indent: 0, parameters: [faceName, faceIndex, background, position] });
-        for (const line of lines.slice(i, i + 4)) {
-          commands.push({ code: 401, indent: 0, parameters: [line] });
-        }
-      }
+      const commands = messageCommands(lines, faceName, faceIndex, background, position, 0);
       const result = await insertEventCommands(project, mapId, eventId, pageIndex, commands);
       return textResult({ ...result, messageBoxes: Math.ceil(lines.length / 4) });
     })
