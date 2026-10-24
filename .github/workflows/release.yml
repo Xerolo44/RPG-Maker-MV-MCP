@@ -65,15 +65,45 @@ jobs:
           npm ci
           npm test
 
+      # npm accepts a publish immediately but needs a few minutes before `npm view` and the MCP
+      # Registry can see the new version. So a re-run inside that window must not fail on
+      # "cannot publish over the previously published version".
       - name: Publish to npm
         if: steps.gate.outputs.release == 'true'
         run: |
+          set -o pipefail
           name=$(node -p "require('./package.json').name")
           if npm view "$name@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
             echo "$name@${{ steps.pkg.outputs.version }} is already on npm, skipping."
-          else
-            npm publish --provenance --access public
+            exit 0
           fi
+          log="$RUNNER_TEMP/npm-publish.log"
+          if npm publish --provenance --access public 2>&1 | tee "$log"; then
+            exit 0
+          fi
+          if grep -q "previously published" "$log"; then
+            echo "$name@${{ steps.pkg.outputs.version }} was already published (npm has not made it visible yet), continuing."
+          else
+            exit 1
+          fi
+
+      # The MCP Registry validates the package against npm, so it fails with a 404 while a fresh
+      # version is still propagating. Wait for it (up to 20 minutes) instead of failing the release.
+      - name: Wait for the version to appear on npm
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version="${{ steps.pkg.outputs.version }}"
+          for i in $(seq 1 60); do
+            if npm view "$name@$version" version --prefer-online >/dev/null 2>&1; then
+              echo "$name@$version is visible on npm."
+              exit 0
+            fi
+            echo "Waiting for $name@$version to appear on npm ($i/60)..."
+            sleep 20
+          done
+          echo "::error::$name@$version did not appear on npm within 20 minutes."
+          exit 1
 
       - name: Publish to MCP Registry
         if: steps.gate.outputs.release == 'true'
@@ -90,7 +120,15 @@ jobs:
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" mcp-publisher
           "$RUNNER_TEMP/mcp-publisher" login github-oidc
-          "$RUNNER_TEMP/mcp-publisher" publish
+          # The registry's own npm lookup can lag behind ours, so retry a few times.
+          for attempt in 1 2 3 4 5; do
+            if "$RUNNER_TEMP/mcp-publisher" publish; then
+              exit 0
+            fi
+            echo "MCP Registry publish failed (attempt $attempt/5), retrying in 30s..."
+            sleep 30
+          done
+          exit 1
 
       - name: Create GitHub Release
         if: steps.gate.outputs.release == 'true'
