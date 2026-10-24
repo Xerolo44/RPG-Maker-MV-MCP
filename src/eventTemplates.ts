@@ -170,7 +170,7 @@ function lockedDoor(p: Extract<TemplateParams, { template: "locked_door" }>): Ev
 }
 
 function inn(p: Extract<TemplateParams, { template: "inn" }>): EventPage[] {
-  const stay = `Stay (${p.price}G)`;
+  const stay = `Stay (${p.price}\\G)`; // \G is the engine control code for the currency unit
   const list: Cmd[] = [
     ...say(p.greeting ?? "Welcome! Would you like to stay the night?", 0),
     cmd(102, 0, [stay, "Leave"], 1, 0, 2, 0),

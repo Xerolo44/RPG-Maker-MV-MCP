@@ -133,7 +133,7 @@ test("inn charges the price, heals, and fades the screen", () => {
   assert.equal(defaultName, "Inn");
   const list = pages[0].list;
   assert.deepEqual(codes(list), [101, 401, 102, 402, 111, 125, 221, 230, 314, 222, 101, 401, 411, 101, 401, 412, 402, 404, 0]);
-  assert.deepEqual(list[2].parameters, [["Stay (50G)", "Leave"], 1, 0, 2, 0]);
+  assert.deepEqual(list[2].parameters, [["Stay (50\\G)", "Leave"], 1, 0, 2, 0]);
   assert.deepEqual(list[4].parameters, [7, 50, 0]);
   assert.deepEqual(list[5].parameters, [1, 0, 50]);
   assert.deepEqual(list[7].parameters, [30]);
