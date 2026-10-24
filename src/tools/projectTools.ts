@@ -18,9 +18,15 @@ export function registerProjectTools(server: McpServer, project: Project): void 
     safe(async ({ path: dir }) => {
       const hadChangeset = project.changesetActive;
       await project.setRoot(dir);
+      const recovered = project.recoveredChangesets;
+      const failures = project.recoveryErrors;
       return textResult(
         `Project set to ${project.root}` +
-          (hadChangeset ? " (the open changeset was discarded; its staged edits were never written)" : "")
+          (hadChangeset ? " (the open changeset was discarded; its staged edits were never written)" : "") +
+          (recovered.length
+            ? `\nRolled back ${recovered.length} interrupted changeset commit(s) from the journal: ${recovered.join(", ")}. Those edits are not on disk; redo them if they are still wanted.`
+            : "") +
+          (failures.length ? `\nWARNING: ${failures.join("\n")}` : "")
       );
     })
   );

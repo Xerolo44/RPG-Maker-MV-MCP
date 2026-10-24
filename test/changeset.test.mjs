@@ -294,6 +294,106 @@ test("setRoot removes leftover *.mcp-tmp files", async () => {
   });
 });
 
+test("setRoot rolls back a commit interrupted between renames", async () => {
+  await withProject(async ({ dir, project }) => {
+    const actors = project.dataFile("Actors.json");
+    const plugin = path.join(dir, "js", "plugins", "New.js");
+    project.beginChangeset("torn");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    await project.writeJson(actors, [null, { id: 1, name: "New" }]);
+    await project.writeText(plugin, "// new\n");
+    const { id } = await project.commitChangeset();
+    const journal = path.join(dir, ".mcp-backups", "changesets", id);
+    assert.equal(await exists(path.join(journal, "committed")), true, "commit marker written");
+
+    // Simulate a kill during step 4: Map001 and New.js were renamed, Actors still waits as a temp.
+    await fs.rm(path.join(journal, "committed"));
+    const newActors = await read(actors);
+    await fs.writeFile(actors, ACTORS_ORIGINAL, "utf8");
+    await fs.writeFile(actors + ".mcp-tmp", newActors, "utf8");
+
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+    assert.equal(await read(actors), ACTORS_ORIGINAL);
+    assert.equal(await exists(actors + ".mcp-tmp"), false);
+    assert.equal(await exists(plugin), false);
+    assert.deepEqual(await changesetDirs(dir), [], "journal entry dropped");
+    assert.deepEqual(fresh.recoveredChangesets, [id]);
+    await assert.rejects(fresh.undoLastChangeset(), /No committed changeset/);
+  });
+});
+
+test("setRoot keeps a fully committed changeset", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("done");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    await project.commitChangeset();
+    const committed = await read(project.mapFile(1));
+    const fresh = new Project();
+    await fresh.setRoot(dir);
+    assert.equal(await read(project.mapFile(1)), committed);
+    assert.equal((await changesetDirs(dir)).length, 1);
+    assert.deepEqual(fresh.recoveredChangesets, []);
+    assert.equal((await fresh.undoLastChangeset()).label, "done");
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+  });
+});
+
+test("setRoot removes a crashed journal folder that has no manifest", async () => {
+  await withProject(async ({ dir, project }) => {
+    const crashed = path.join(dir, ".mcp-backups", "changesets", "2026-01-01T00-00-00-000Z");
+    await fs.mkdir(path.join(crashed, "files", "data"), { recursive: true });
+    await fs.writeFile(path.join(crashed, "files", "data", "Map001.json"), MAP_ORIGINAL, "utf8");
+    await project.setRoot(dir);
+    assert.deepEqual(await changesetDirs(dir), []);
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+  });
+});
+
+test("undo with a missing pre-image restores nothing", async () => {
+  await withProject(async ({ dir, project }) => {
+    project.beginChangeset("two files");
+    await project.writeJson(project.dataFile("Actors.json"), [null, { id: 1, name: "New" }]);
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const { id } = await project.commitChangeset();
+    const actorsAfter = await read(project.dataFile("Actors.json"));
+    const mapAfter = await read(project.mapFile(1));
+    await fs.rm(path.join(dir, ".mcp-backups", "changesets", id, "files", "data", "Map001.json"));
+    await assert.rejects(
+      project.undoLastChangeset(),
+      (err) => err instanceof ProjectError && /Map001\.json/.test(err.message) && /nothing was restored/i.test(err.message)
+    );
+    assert.equal(await read(project.dataFile("Actors.json")), actorsAfter);
+    assert.equal(await read(project.mapFile(1)), mapAfter);
+    assert.deepEqual(await changesetDirs(dir), [id]);
+  });
+});
+
+test("writes and changeset calls are refused while a commit or undo is running", async () => {
+  await withProject(async ({ project }) => {
+    project.beginChangeset("busy");
+    await project.writeJson(project.mapFile(1), { data: [3], events: [null] });
+    const committing = project.commitChangeset();
+    const busy = (err) => err instanceof ProjectError && /in progress/.test(err.message);
+    await assert.rejects(project.writeJson(project.dataFile("Actors.json"), [null]), busy);
+    await assert.rejects(project.writeText(project.dataFile("Items.json"), "[null]"), busy);
+    assert.throws(() => project.beginChangeset("other"), busy);
+    assert.throws(() => project.discardChangeset(), busy);
+    await assert.rejects(project.commitChangeset(), busy);
+    await committing;
+    assert.equal(await read(project.dataFile("Actors.json")), ACTORS_ORIGINAL, "refused write never landed");
+
+    const undoing = project.undoLastChangeset();
+    await assert.rejects(project.writeJson(project.dataFile("Actors.json"), [null]), busy);
+    await assert.rejects(project.undoLastChangeset(), busy);
+    await undoing;
+    assert.equal(await read(project.mapFile(1)), MAP_ORIGINAL);
+    // once finished, writes work again
+    await project.writeJson(project.dataFile("Items.json"), [null]);
+  });
+});
+
 test("setRoot discards an open changeset", async () => {
   await withProject(async ({ dir, project }) => {
     project.beginChangeset("lost");

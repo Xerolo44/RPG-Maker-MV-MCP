@@ -33,7 +33,7 @@ export function registerChangesetTools(server: McpServer, project: Project): voi
       title: "Commit changeset",
       description:
         "Write every file staged by the open changeset to disk as one unit and return a per-file summary (created/modified, event/tile/record counts). Staged .json files are validated first: if any is invalid, nothing is written and the changeset stays open. " +
-        "Pre-images are journaled under .mcp-backups/changesets/<id>/ so undo_changeset can roll the commit back. Until this is called, nothing of the changeset is on disk and reads reflect the staged edits. " +
+        "Pre-images are journaled under .mcp-backups/changesets/<id>/ so undo_changeset can roll the commit back; a commit interrupted by a crash is rolled back automatically the next time the project is opened. Other edits are refused while the commit runs. Until this is called, nothing of the changeset is on disk and reads reflect the staged edits. " +
         EDITOR_NOTE,
       inputSchema: {},
     },

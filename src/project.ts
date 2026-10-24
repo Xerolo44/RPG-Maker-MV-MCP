@@ -48,8 +48,16 @@ export const CHANGESET_DIR_NAME = "changesets";
 const MAX_BACKUP_SESSIONS = 10;
 /** Suffix of the temp files a changeset commit writes before renaming them into place. */
 const TEMP_SUFFIX = ".mcp-tmp";
+/** File written into a journal entry after its last rename: the commit fully landed. */
+const COMMIT_MARKER = "committed";
 
 const toPosix = (p: string): string => p.replace(/\\/g, "/");
+
+const fileExists = (p: string): Promise<boolean> =>
+  fs.access(p).then(
+    () => true,
+    () => false
+  );
 
 function parseOrRaw(text: string | null, isJson: boolean): unknown {
   if (text === null || !isJson) return text;
@@ -68,6 +76,10 @@ export class Project {
   private writeSignatures = new Map<string, { size: number; mtimeMs: number }>();
   /** Open changeset: staged file texts keyed by resolved absolute path. */
   private changeset: { label: string; staged: Map<string, string> } | null = null;
+  /** Set while commitChangeset / undoLastChangeset run; writes and changeset calls are refused. */
+  private busy: "commit" | "undo" | null = null;
+  private recovered: string[] = [];
+  private recoveryFailures: string[] = [];
 
   get root(): string {
     if (!this.rootDir) {
@@ -83,6 +95,7 @@ export class Project {
   }
 
   async setRoot(dir: string): Promise<void> {
+    this.assertIdle("set_project");
     const resolved = path.resolve(dir);
     let entries: string[];
     try {
@@ -103,6 +116,7 @@ export class Project {
     this.backedUp.clear();
     this.writeSignatures.clear();
     this.changeset = null;
+    await this.recoverInterruptedCommits();
     await this.removeLeftoverTemps();
   }
 
@@ -244,6 +258,7 @@ export class Project {
    * recordWrite. Inside one: only staged in memory (backup deferred to commit).
    */
   async writeText(filePath: string, text: string): Promise<void> {
+    this.assertIdle("writing project files");
     if (this.changeset) {
       const abs = path.resolve(filePath);
       this.relativeInProject(abs);
@@ -260,9 +275,33 @@ export class Project {
     return this.changeset !== null;
   }
 
+  /** Ids of interrupted commits that the last setRoot rolled back from their journal. */
+  get recoveredChangesets(): string[] {
+    return [...this.recovered];
+  }
+
+  /** Interrupted commits the last setRoot could not roll back (their journal entries were kept). */
+  get recoveryErrors(): string[] {
+    return [...this.recoveryFailures];
+  }
+
+  /**
+   * Throw while a commit or undo is running: it spans many awaits, and a write (or a new
+   * changeset) arriving in that window would be staged into a map that is about to be dropped,
+   * or written under files the undo is about to overwrite.
+   */
+  private assertIdle(action: string): void {
+    if (this.busy) {
+      throw new ProjectError(
+        `A changeset ${this.busy} is in progress; ${action} has to wait until it finishes. Try again in a moment.`
+      );
+    }
+  }
+
   /** Start staging writes in memory. Throws if a changeset is already open. */
   beginChangeset(label: string): void {
     this.root; // throws if no project is selected
+    this.assertIdle("begin_changeset");
     if (this.changeset) {
       throw new ProjectError(
         `A changeset ("${this.changeset.label}") is already open. Commit it with commit_changeset or drop it with discard_changeset before starting another.`
@@ -273,6 +312,7 @@ export class Project {
 
   /** Drop every staged write. Nothing on disk changes. */
   discardChangeset(): void {
+    this.assertIdle("discard_changeset");
     if (!this.changeset) throw new ProjectError("No changeset is open. Start one with begin_changeset.");
     this.changeset = null;
   }
@@ -280,11 +320,23 @@ export class Project {
   /**
    * Write every staged file to disk as one unit: (1) validate staged .json, (2) journal
    * pre-images + manifest, session backups, (3) write <file>.mcp-tmp, (4) rename each over
-   * its target. A failed rename restores the files already replaced and removes the temps.
+   * its target, then write the journal's `committed` marker. A failed rename restores the
+   * files already replaced and removes the temps; a commit killed before the marker is
+   * rolled back by the next setRoot.
    */
   async commitChangeset(): Promise<ChangesetSummary> {
+    this.assertIdle("commit_changeset");
     const cs = this.changeset;
     if (!cs) throw new ProjectError("No changeset is open. Start one with begin_changeset.");
+    this.busy = "commit";
+    try {
+      return await this.runCommit(cs);
+    } finally {
+      this.busy = null;
+    }
+  }
+
+  private async runCommit(cs: { label: string; staged: Map<string, string> }): Promise<ChangesetSummary> {
     const entries = [...cs.staged].map(([abs, text]) => ({
       abs,
       rel: toPosix(this.relativeInProject(abs)),
@@ -353,13 +405,14 @@ export class Project {
       throw err;
     }
 
-    // (4) renames
+    // (4) renames, then the marker that says the commit fully landed
     let done = 0;
     try {
       for (const e of entries) {
         await fs.rename(e.abs + TEMP_SUFFIX, e.abs);
         done++;
       }
+      await fs.writeFile(path.join(journal, COMMIT_MARKER), new Date().toISOString(), "utf8");
     } catch (err) {
       let rollbackOk = true;
       for (const e of entries.slice(0, done)) {
@@ -379,7 +432,7 @@ export class Project {
       for (const e of entries.slice(done)) await fs.rm(e.abs + TEMP_SUFFIX, { force: true }).catch(() => {});
       if (rollbackOk) await fs.rm(journal, { recursive: true, force: true }).catch(() => {});
       throw new ProjectError(
-        `Commit failed while replacing ${entries[done].rel}: ${(err as Error).message}. ` +
+        `Commit failed while ${done < entries.length ? `replacing ${entries[done].rel}` : "finishing the journal"}: ${(err as Error).message}. ` +
           (rollbackOk
             ? "Files already replaced were restored, so nothing changed on disk; the changeset is still open."
             : `Some files could not be restored; call undo_changeset to roll back to the journal ${id}.`)
@@ -407,56 +460,94 @@ export class Project {
    * byte-for-byte, delete files it created, then drop the journal entry.
    */
   async undoLastChangeset(): Promise<ChangesetSummary> {
+    this.assertIdle("undo_changeset");
     if (this.changeset) {
       throw new ProjectError(
         `A changeset ("${this.changeset.label}") is open. Commit or discard it before undo_changeset.`
       );
     }
-    const ids = await this.listChangesetIds();
-    const id = ids[ids.length - 1];
-    if (!id) throw new ProjectError("No committed changeset to undo.");
-    const journal = path.join(this.changesetRoot, id);
-    let manifest: ChangesetManifest;
+    this.busy = "undo";
     try {
-      manifest = JSON.parse(await fs.readFile(path.join(journal, "manifest.json"), "utf8")) as ChangesetManifest;
-      if (!Array.isArray(manifest.files)) throw new Error("no file list");
-    } catch (err) {
-      throw new ProjectError(`Changeset journal ${journal} is unreadable: ${(err as Error).message}`);
+      const ids = await this.listChangesetIds();
+      const id = ids[ids.length - 1];
+      if (!id) throw new ProjectError("No committed changeset to undo.");
+      const manifest = await this.readManifest(id);
+      const files = await this.rollBack(id, manifest, true);
+      return { id, label: manifest.label, files };
+    } finally {
+      this.busy = null;
     }
+  }
 
-    const files: ChangesetSummary["files"] = [];
+  private async readManifest(id: string): Promise<ChangesetManifest> {
+    const file = path.join(this.changesetRoot, id, "manifest.json");
+    try {
+      const manifest = JSON.parse(await fs.readFile(file, "utf8")) as ChangesetManifest;
+      if (!Array.isArray(manifest.files)) throw new Error("no file list");
+      return manifest;
+    } catch (err) {
+      throw new ProjectError(`Changeset journal ${file} is unreadable: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Put every file of a journal entry back to its pre-image (deleting files that did not
+   * exist), then drop the entry. All pre-images are loaded before anything is touched, so a
+   * damaged journal restores nothing; a write failure part-way keeps the entry, and running
+   * the roll-back again finishes it. `snapshot` takes session backups first (undo, not recovery).
+   */
+  private async rollBack(id: string, manifest: ChangesetManifest, snapshot: boolean): Promise<ChangesetSummary["files"]> {
+    const journal = path.join(this.changesetRoot, id);
+    const plan: { rel: string; target: string; bytes: Buffer | null }[] = [];
     for (const f of manifest.files) {
       const target = this.resolveInProject(f.path);
-      const isJson = target.toLowerCase().endsWith(".json");
-      const current = await fs.readFile(target, "utf8").catch(() => null);
-      await this.backup(target);
+      let bytes: Buffer | null = null;
       if (f.existed) {
-        let bytes: Buffer;
         try {
           bytes = await fs.readFile(path.join(journal, "files", f.path));
         } catch {
-          throw new ProjectError(`Changeset journal ${id} is missing its copy of ${f.path}; nothing more was restored.`);
+          throw new ProjectError(
+            `Changeset journal ${id} is missing its copy of ${f.path}, so nothing was restored. The journal is in ${journal}.`
+          );
         }
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target + TEMP_SUFFIX, bytes);
-        await fs.rename(target + TEMP_SUFFIX, target);
-        await this.recordWrite(target);
-        files.push({
-          path: f.path,
-          change: "restored",
-          summary: summarizeChange(f.path, parseOrRaw(current, isJson), parseOrRaw(bytes.toString("utf8"), isJson)),
-        });
-      } else {
-        await fs.rm(target, { force: true });
-        this.forgetWrite(target);
-        files.push({ path: f.path, change: "removed", summary: "removed (it did not exist before the changeset)" });
+      }
+      plan.push({ rel: f.path, target, bytes });
+    }
+
+    const files: ChangesetSummary["files"] = [];
+    for (const { rel, target, bytes } of plan) {
+      try {
+        const isJson = target.toLowerCase().endsWith(".json");
+        const current = await fs.readFile(target, "utf8").catch(() => null);
+        if (snapshot) await this.backup(target);
+        await fs.rm(target + TEMP_SUFFIX, { force: true });
+        if (bytes) {
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target + TEMP_SUFFIX, bytes);
+          await fs.rename(target + TEMP_SUFFIX, target);
+          await this.recordWrite(target);
+          files.push({
+            path: rel,
+            change: "restored",
+            summary: summarizeChange(rel, parseOrRaw(current, isJson), parseOrRaw(bytes.toString("utf8"), isJson)),
+          });
+        } else {
+          await fs.rm(target, { force: true });
+          this.forgetWrite(target);
+          files.push({ path: rel, change: "removed", summary: "removed (it did not exist before the changeset)" });
+        }
+      } catch (err) {
+        if (err instanceof ProjectError) throw err;
+        throw new ProjectError(
+          `Rolling back changeset ${id} failed at ${rel}: ${(err as Error).message}. Files before it were already restored and the journal entry was kept: close whatever holds the file (e.g. the RPG Maker editor) and call undo_changeset again to finish.`
+        );
       }
     }
     await fs.rm(journal, { recursive: true, force: true });
-    return { id, label: manifest.label, files };
+    return files;
   }
 
-  /** Committed changeset ids (journal folders with a manifest), oldest first. */
+  /** Changeset ids (journal folders with a manifest), oldest first. */
   private async listChangesetIds(): Promise<string[]> {
     let entries: string[];
     try {
@@ -466,11 +557,7 @@ export class Project {
     }
     const ids: string[] = [];
     for (const e of entries.sort()) {
-      const ok = await fs.access(path.join(this.changesetRoot, e, "manifest.json")).then(
-        () => true,
-        () => false
-      );
-      if (ok) ids.push(e);
+      if (await fileExists(path.join(this.changesetRoot, e, "manifest.json"))) ids.push(e);
     }
     return ids;
   }
@@ -478,7 +565,7 @@ export class Project {
   private async newChangesetId(): Promise<string> {
     const base = new Date().toISOString().replace(/[:.]/g, "-");
     let id = base;
-    for (let n = 1; await this.exists(path.join(this.changesetRoot, id)); n++) id = `${base}-${n}`;
+    for (let n = 1; await fileExists(path.join(this.changesetRoot, id)); n++) id = `${base}-${n}`;
     return id;
   }
 
@@ -498,8 +585,41 @@ export class Project {
   }
 
   /**
+   * Repair the journal after a crash (run by setRoot before anything else touches files):
+   * a folder without manifest.json died before any project file was touched and is deleted;
+   * an entry with a manifest but no `committed` marker is a torn commit and is rolled back
+   * from its pre-images (newest first). Fully committed entries are left alone.
+   */
+  private async recoverInterruptedCommits(): Promise<void> {
+    this.recovered = [];
+    this.recoveryFailures = [];
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.changesetRoot);
+    } catch {
+      return;
+    }
+    for (const id of entries.sort().reverse()) {
+      const journal = path.join(this.changesetRoot, id);
+      if (!(await fileExists(path.join(journal, "manifest.json")))) {
+        await fs.rm(journal, { recursive: true, force: true }).catch(() => {});
+        continue;
+      }
+      if (await fileExists(path.join(journal, COMMIT_MARKER))) continue;
+      try {
+        await this.rollBack(id, await this.readManifest(id), false);
+        this.recovered.push(id);
+      } catch (err) {
+        this.recoveryFailures.push(
+          `Could not roll back the interrupted changeset ${id}: ${(err as Error).message}`
+        );
+      }
+    }
+  }
+
+  /**
    * Delete *.mcp-tmp files a crashed commit may have left: in data/, js/, js/plugins/ and
-   * the folders of every file in the newest journal entry (the only commit that can be torn).
+   * the folders of every file in the newest journal entry.
    */
   private async removeLeftoverTemps(): Promise<void> {
     const dirs = new Set([
@@ -511,9 +631,7 @@ export class Project {
     const last = ids[ids.length - 1];
     if (last) {
       try {
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(this.changesetRoot, last, "manifest.json"), "utf8")
-        ) as ChangesetManifest;
+        const manifest = await this.readManifest(last);
         for (const f of manifest.files) dirs.add(path.dirname(this.resolveInProject(f.path)));
       } catch {
         // unreadable manifest: the fixed folders are still cleaned
