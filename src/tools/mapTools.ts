@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Project, ProjectError } from "../project.js";
 import { safe, textResult } from "../util.js";
 import { TileError, TileSpec, applyPaintOps } from "../tiles.js";
+import { EVENT_COMMAND_REFERENCE } from "../reference.js";
 import { checkSheetsAvailable, loadTileset, tileSpecSchema } from "./tileTools.js";
 
 interface MapInfo {
@@ -32,7 +33,7 @@ interface MvMap {
   [key: string]: unknown;
 }
 
-const DEFAULT_EVENT_PAGE = {
+export const DEFAULT_EVENT_PAGE = {
   conditions: {
     actorId: 1,
     actorValid: false,
@@ -72,73 +73,6 @@ const DEFAULT_EVENT_PAGE = {
   trigger: 0,
   walkAnime: true,
 };
-
-const EVENT_COMMAND_REFERENCE = `RPG Maker MV event command codes (each list entry is {"code": N, "indent": N, "parameters": [...]}; every list ends with {"code": 0, "indent": 0, "parameters": []}):
-
-MESSAGES
-101 Show Text setup: [faceName, faceIndex, background(0 window,1 dim,2 transparent), position(0 top,1 middle,2 bottom)] — followed by one 401 per text line
-401 Text line: ["the text"]
-102 Show Choices: [["Choice A","Choice B"], cancelType, defaultType, positionType, background] — each branch starts with 402 [index, "text"], cancel branch 403, end 404
-103 Input Number: [variableId, digits]
-105 Show Scrolling Text: [speed, noFast] — lines follow as 405 ["text"]
-
-FLOW CONTROL
-111 Conditional Branch: params vary — [0, switchId, 0=ON/1=OFF] for switch; [1, varId, 0, operand, value, op(0:=,1:>=,2:<=,3:>,4:<,5:!=)] for variable — else branch 411, end 412
-112 Loop (end 413 Repeat Above), 113 Break Loop, 115 Exit Event Processing
-117 Common Event: [commonEventId]
-118 Label: ["name"], 119 Jump to Label: ["name"]
-230 Wait: [frames] (60 = 1 second)
-
-GAME PROGRESSION
-121 Control Switches: [startId, endId, 0=ON/1=OFF]
-122 Control Variables: [startId, endId, operation(0:set,1:add,2:sub,3:mul,4:div,5:mod), operandType(0:constant,1:variable,2:random,3:gameData,4:script), ...operands]
-123 Control Self Switch: ["A"|"B"|"C"|"D", 0=ON/1=OFF]
-124 Control Timer: [0=start/1=stop, seconds]
-
-PARTY
-125 Change Gold: [operation(0 add,1 sub), operandType(0 const,1 var), value]
-126 Change Items: [itemId, operation, operandType, value]
-127/128 Change Weapons/Armors: [id, op, operandType, value, includeEquip]
-129 Change Party Member: [actorId, 0=add/1=remove, initialize]
-
-ACTOR
-311 Change HP: [actorType(0 fixed,1 var), actorId, op, operandType, value, allowDeath]
-312 Change MP, 313 Change State: [..., 0=add/1=remove, stateId]
-314 Recover All, 315 Change EXP, 316 Change Level, 317 Change Parameter
-318 Change Skill: [actorType, actorId, 0=learn/1=forget, skillId]
-
-MOVEMENT / MAP
-201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType]
-203 Set Event Location, 204 Scroll Map: [direction, distance, speed]
-205 Set Movement Route: [characterId(-1 player,0 this,N eventId), moveRoute] — visual-only mirror entries use 505
-211 Change Transparency, 212 Show Animation: [characterId, animationId, wait]
-213 Show Balloon Icon: [characterId, balloonId, wait]
-216 Change Player Followers, 217 Gather Followers
-
-SCREEN
-221 Fadeout Screen, 222 Fadein Screen
-223 Tint Screen: [[r,g,b,gray], frames, wait]
-224 Flash Screen: [[r,g,b,intensity], frames, wait]
-225 Shake Screen: [power, speed, frames, wait]
-
-AUDIO / PICTURES
-241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume, pan, pitch}]
-242 Fadeout BGM: [seconds], 251 Stop SE
-231 Show Picture: [pictureId, "name", origin, designation, x, y, scaleX, scaleY, opacity, blendMode]
-232 Move Picture, 235 Erase Picture: [pictureId]
-
-SCENES / BATTLE
-301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — win branch 601, escape 602, lose 603, end 604
-302 Shop Processing: [[goodsType, id, priceType, price], purchaseOnly] — extra goods rows as 605
-303 Name Input Processing: [actorId, maxChars]
-351 Open Menu Screen, 352 Open Save Screen, 353 Game Over, 354 Return to Title
-
-ADVANCED
-355 Script: ["js line 1"] — continuation lines 655 ["js line N"]
-356 Plugin Command: ["CommandName arg1 arg2"]
-
-Event page "trigger": 0 Action Button, 1 Player Touch, 2 Event Touch, 3 Autorun, 4 Parallel.
-Event page "priorityType": 0 Below characters, 1 Same as characters, 2 Above characters.`;
 
 async function readMap(project: Project, mapId: number): Promise<MvMap> {
   return project.readJson<MvMap>(project.mapFile(mapId));

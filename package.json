@@ -1,6 +1,6 @@
 {
   "name": "@xerolo44/rpgmaker-mv-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for reading, editing, and playtesting RPG Maker MV projects",
   "type": "module",
   "mcpName": "io.github.Xerolo44/rpgmaker-mv-mcp",
@@ -12,13 +12,15 @@
   },
   "main": "dist/index.js",
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "smoke": "node scripts/smoke.mjs",
-    "test": "npm run build && node scripts/smoke.mjs"
+    "test": "npm run build && node --test scripts/unit.mjs && node scripts/smoke.mjs",
+    "test:unit": "node --test scripts/unit.mjs"
   },
   "engines": {
     "node": ">=18"

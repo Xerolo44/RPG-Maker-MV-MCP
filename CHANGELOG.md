@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-24
+
+### Added
+- **Skill files, prompts and resources** (the server previously offered tools only):
+  - Six bundled `SKILL.md` workflow guides in `skills/` (`rpgmaker-mv-workflow`,
+    `rpgmaker-map-building`, `rpgmaker-event-writing`, `rpgmaker-balancing`,
+    `rpgmaker-localization`, `rpgmaker-plugin-dev`), shipped in the npm package.
+  - `install_skills` copies them into `<project>/.claude/skills` (or `~/.claude/skills`).
+  - Resources: `rpgmaker://skills/{name}` plus the lookup tables `rpgmaker://reference/event-commands`,
+    `trait-codes`, `damage-formulas` and `database-fields`.
+  - Prompts: `new_town`, `design_dungeon`, `add_quest`, `balance_check`, `review_dialogue`,
+    `translate_game`, `project_health`.
+- **`render_map_image`** — renders a map to a PNG: all tile layers with engine-exact autotile
+  shapes, shadows, tiles that draw above characters, event character sprites, numbered/coloured
+  event markers (doors in blue), region ids and a grid. Dependency-free PNG decoder/encoder.
+- **Map connector** — `connect_maps` creates Transfer Player doors on two maps in both
+  directions (spawn tile and facing, touch/action trigger, fade, sound; validated before anything
+  is written, refuses occupied tiles). `list_map_connections` lists all doors, one-way links,
+  transfers to missing maps and maps unreachable from the start map.
+- **Bulk edits and balancing**:
+  - `bulk_update_records` — set/add/multiply/percent on any field path (`params.atk`, `price`,
+    `damage.formula`, ...) for filtered records, with rounding and clamps; dry run by default.
+  - `generate_param_curve` and `generate_enemy_scaling` — linear, ease, exponential and logistic
+    stat curves for classes and ordered enemy tiers (including EXP and gold); dry run by default.
+  - `balance_report` — class curves, attack damage by level, attacker-vs-enemy and enemy-vs-attacker
+    hits-to-kill matrices and warnings.
+  - `simulate_battle` — seeded Monte-Carlo troop-vs-party simulation using the real damage
+    pipeline (formulas, variance, crits, hit/evasion, TGR, turn order, enemy action ratings).
+    Damage formulas are checked against a whitelist before they are evaluated.
+- **Localization** — `export_texts` / `import_texts` for database texts, System terms, map names,
+  dialogue, choices, scrolling text and battle events as CSV or JSON. Re-exporting keeps existing
+  translations, import is a dry run by default, flags changed originals and control-code
+  mismatches, keeps choice labels in sync and splits long dialogue into extra message boxes.
+- Unit tests (`npm run test:unit`) for the pure modules; `npm test` runs build, unit and smoke tests.
+
+### Changed
+- The event command reference text moved to `src/reference.ts` so it can also be served as a resource.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added
