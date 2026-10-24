@@ -324,6 +324,48 @@ test("build_dialogue_tree inserts into an event page and preserves the terminato
   });
 });
 
+test("build_dialogue_tree index: top-level positions work, positions inside a block are refused", async () => {
+  await withProjectServer(async (client, { mapFile }) => {
+    const base = [
+      cmd(111, 0, 0, 5, 0),
+      cmd(101, 1, "", 0, 0, 2),
+      cmd(401, 1, "inside"),
+      cmd(412, 0),
+      cmd(0, 0),
+    ];
+    const reset = async () => {
+      const map = JSON.parse(await fs.readFile(mapFile, "utf8"));
+      map.events[1].pages[0].list = structuredClone(base);
+      await fs.writeFile(mapFile, JSON.stringify(map), "utf8");
+      return JSON.stringify(map);
+    };
+    const listOf = async () => JSON.parse(await fs.readFile(mapFile, "utf8")).events[1].pages[0].list;
+
+    // top level: before the 111 (index 0) and at the terminator (index 4)
+    await reset();
+    for (const [index, expectAt] of [[0, 0], [4, 4]]) {
+      await reset();
+      const { res, body } = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.ok(!res.isError, res.content[0].text);
+      assert.equal(body.inserted.at, expectAt);
+      const list = await listOf();
+      assert.deepEqual(validateCommandList(list), []);
+      const at = list.findIndex((c) => c.code === 401 && c.parameters[0] === "new");
+      assert.equal(list[at].indent, 0);
+      assert.equal(list[at - 1].indent, 0);
+    }
+
+    // inside the body (index 1, 2) and before the closer 412 (index 3): refused, file untouched
+    for (const index of [1, 2, 3]) {
+      const before = await reset();
+      const { res } = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.equal(res.isError, true, `index ${index}`);
+      assert.match(res.content[0].text, /inside a block|nested/, `index ${index}`);
+      assert.equal(await fs.readFile(mapFile, "utf8"), before);
+    }
+  });
+});
+
 test("build_dialogue_tree omits preview for long inserted trees and reports a half-specified target", async () => {
   await withProjectServer(async (client) => {
     const tree = Array.from({ length: 21 }, (_, i) => ({ say: `line ${i}` }));

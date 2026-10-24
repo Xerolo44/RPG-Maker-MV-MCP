@@ -175,3 +175,45 @@ test("render_diff against a changeset pre-image", async () => {
     assert.match(res.content[0].text, /1 changed cell/);
   });
 });
+
+test("render_diff inside an open changeset compares the staged map with the file on disk", async () => {
+  await withClient(async ({ dir, client }) => {
+    await client.callTool({ name: "set_project", arguments: { path: dir } });
+    // no changeset, no backup: nothing to compare with
+    assert.match((await call(client, { mapId: 1 })).content[0].text, /no earlier version/);
+    const begin = await client.callTool({ name: "begin_changeset", arguments: { label: "diff" } });
+    assert.notEqual(begin.isError, true, begin.content[0].text);
+    // open but the map not staged yet: still no baseline
+    assert.match((await call(client, { mapId: 1 })).content[0].text, /no earlier version/);
+    const made = await client.callTool({
+      name: "create_event_from_template",
+      arguments: { mapId: 1, x: 2, y: 2, template: "npc", lines: ["hi"] },
+    });
+    assert.notEqual(made.isError, true, made.content[0].text);
+    const res = await call(client, { mapId: 1 });
+    assert.notEqual(res.isError, true);
+    assert.match(res.content[0].text, /on disk \(before the open changeset\)/);
+    assert.match(res.content[0].text, /Events added[^\n]*#1/);
+    assert.ok(res.content.some((c) => c.type === "image"));
+  });
+});
+
+test("render_diff treats a malformed backup map as not a valid map", async () => {
+  await withClient(async ({ dir, client }) => {
+    await client.callTool({ name: "set_project", arguments: { path: dir } });
+    const good = map(4, 4, { tilesetId: 1 });
+    const bad = [
+      { ...good, data: good.data.slice(0, 10) },
+      { ...good, events: "nope" },
+      { ...good, events: undefined },
+    ];
+    for (const [i, b] of bad.entries()) {
+      await fs.rm(path.join(dir, ".mcp-backups"), { recursive: true, force: true });
+      await writeBackup(dir, ["2026-01-01T00-00-00"], b);
+      const res = await call(client, { mapId: 1 });
+      assert.notEqual(res.isError, true, `case ${i}`);
+      assert.equal(res.content.length, 1, `case ${i}`);
+      assert.match(res.content[0].text, /not a valid map/, `case ${i}`);
+    }
+  });
+});

@@ -83,7 +83,7 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
         "Creates a complete, ready-to-use map event at (x, y) from a template, in one write. Refuses out-of-bounds tiles, and refuses a tile that already holds an event unless allowStack is true. " +
         "Graphics default to none: events are INVISIBLE in game until an image is supplied (chest: closedImage/openImage, npc: image; locked_door, inn, shop and save_point never get a graphic and are meant to sit on a tile that already looks right). " +
         "Templates and their params: " +
-        "chest {reward: {gold?, item?: {type: item|weapon|armor, id, count?}}, message?, closedImage?, openImage?} (two pages: the action button opens it and sets self switch A, then an empty opened page); " +
+        "chest {reward: {gold?, item?: {type: item|weapon|armor, id, count?}}, message?, closedImage?, openImage?} (two pages: the action button opens it and sets self switch A, then an empty opened page; if only closedImage is given, openImage defaults to the same graphic with direction 8 - the opened-chest frame of the standard chest sheets); " +
         "locked_door {keyItemId, destination: {mapId, x, y, direction?: 0|2|4|6|8}, lockedMessage?, consumeKey?} (transfers the player if the party holds the key); " +
         "inn {price, greeting?} (Stay/Leave choice; staying charges gold, fades out, restores the party, fades in); " +
         "shop {goods: [{type: item|weapon|armor, id, price?}] (1-40; price defaults to the database price), purchaseOnly?}; " +

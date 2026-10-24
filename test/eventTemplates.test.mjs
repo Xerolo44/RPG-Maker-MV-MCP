@@ -80,6 +80,17 @@ test("chest images go on the matching page", () => {
   assert.equal(pages[1].image.pattern, 2);
 });
 
+test("a chest with only closedImage reuses it, facing up, for the opened page", () => {
+  const closedImage = { characterName: "!Chest", characterIndex: 2, direction: 2, pattern: 1 };
+  const { pages } = build({ ...CHEST, closedImage });
+  assert.equal(pages[1].image.characterName, "!Chest");
+  assert.equal(pages[1].image.characterIndex, 2);
+  assert.equal(pages[1].image.direction, 8);
+  assert.equal(pages[0].image.direction, 2);
+  const none = build(CHEST).pages;
+  assert.equal(none[1].image.characterName, "", "no images given: stays invisible");
+});
+
 test("chest with an item reward uses 126 [id, 0, 0, count]; weapons and armors use 127/128", () => {
   const item = build({ template: "chest", reward: { item: { type: "item", id: 7, count: 3 } } }).pages[0].list;
   const at = item.find((c) => c.code === 126);

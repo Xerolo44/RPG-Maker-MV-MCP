@@ -94,7 +94,7 @@ export const templateFieldShape = {
   reward: chestReward.optional().describe("chest: { gold?: number, item?: {type: item|weapon|armor, id, count?} }, at least one"),
   message: z.string().optional().describe("chest: text shown when opened (default \"You found treasure!\")"),
   closedImage: imageSchema.optional().describe("chest: graphic before opening"),
-  openImage: imageSchema.optional().describe("chest: graphic after opening"),
+  openImage: imageSchema.optional().describe("chest: graphic after opening (default: closedImage facing up)"),
   keyItemId: z.number().int().optional().describe("locked_door: item id of the key"),
   destination: destination.optional().describe("locked_door: { mapId, x, y, direction?: 0|2|4|6|8 }"),
   lockedMessage: z.string().optional().describe("locked_door: text when the player has no key (default \"It's locked.\")"),
@@ -151,7 +151,12 @@ function chest(p: Extract<TemplateParams, { template: "chest" }>): EventPage[] {
   list.push(cmd(123, 0, "A", 0));
   return [
     page(list, { image: p.closedImage }),
-    page([], { image: p.openImage, conditions: { selfSwitchValid: true, selfSwitchCh: "A" } }),
+    // Without an openImage the chest would vanish when opened (priority 1 keeps its tile blocked), so reuse
+    // the closed graphic facing up, as MV's Quick Event treasure does.
+    page([], {
+      image: p.openImage ?? (p.closedImage ? { ...p.closedImage, direction: 8 } : undefined),
+      conditions: { selfSwitchValid: true, selfSwitchCh: "A" },
+    }),
   ];
 }
 
