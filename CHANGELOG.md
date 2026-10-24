@@ -89,11 +89,13 @@ All notable changes to this project are documented here. The format follows
   rebinding could let a web page read the project files.
 - `build_dialogue_tree`'s `cancel: "branch"` creates an empty "when cancel" branch whose body
   cannot be authored from the tree.
-- `simulate_event` lists the shop and save screens (so the inn, shop and save-point templates) as
-  unsupported. It caps the number of entries, not their size, does not clamp gold above
-  99,999,999, does not support labels (118/119), and ends silently on an unmatched 111 or 102.
-- Stamp names are case-insensitive on Windows only ("Well" and "well" are one file on Windows and
-  two on Linux). `list_stamps` does not list stamps staged in an open changeset.
+- `simulate_event` lists some commands the templates use as unsupported: the shop and save screens
+  (302, 352) and the fades, wait and Recover All (221/222/230/314) that the inn template uses. It
+  caps the number of entries, not their size, does not clamp gold above 99,999,999, does not
+  support labels (118/119), and ends silently on an unmatched 111 or 102.
+- Stamp-name case sensitivity follows the filesystem (case-insensitive on Windows and default macOS
+  volumes, case-sensitive on typical Linux), so "Well" and "well" may be one file or two. `list_stamps` does not list stamps staged in an
+  open changeset.
 - The decor density of generated maps is conservative (about 1-2% of floor cells).
 - MZ projects are accepted but untested.
 - The event-command layouts used by templates and dialogue trees come from knowledge of the MV
