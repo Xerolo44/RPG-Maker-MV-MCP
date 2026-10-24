@@ -268,6 +268,17 @@ await call("audit_assets", {}, (t) => t.includes("Actor1"));
   await call("import_asset", { source: src, folder: "img/pictures" },
     (t) => t.includes('"imported"') && t.includes("img/pictures/SmokePic.png"));
   await fs.rm(srcDir, { recursive: true, force: true });
+
+  // the imported file shows up in the catalogue (nothing references it) and can be previewed
+  await call("list_assets", { folder: "img/pictures" },
+    (t) => t.includes('"SmokePic"') && t.includes('"unused": true'));
+  const preview = await client.callTool({ name: "preview_asset", arguments: { folder: "img/pictures", name: "SmokePic" } });
+  const previewImg = preview.content?.find((c) => c.type === "image");
+  const previewOk = !preview.isError && previewImg?.mimeType === "image/png"
+    && Buffer.from(previewImg.data, "base64").subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    && preview.content[0].text.includes("SmokePic.png");
+  console.log(`${previewOk ? "PASS" : "FAIL"} preview_asset returns a PNG image`);
+  if (!previewOk) { failures++; console.log("    ", preview.content?.[0]?.text?.slice(0, 300)); }
 }
 
 // lint: the 201 to map 99 added above targets a map that does not exist

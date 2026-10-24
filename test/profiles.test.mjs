@@ -88,7 +88,7 @@ test("GROUPS includes assets and parseProfile('assets') enables it with project"
 test("--tools assets adds exactly the asset tools to the project tools", async () => {
   const projectOnly = await withServer(["--tools", "project"], {}, toolNames);
   const withAssets = await withServer(["--tools", "assets"], {}, toolNames);
-  assert.deepEqual(withAssets.filter((n) => !projectOnly.includes(n)).sort(), ["import_asset"]);
+  assert.deepEqual(withAssets.filter((n) => !projectOnly.includes(n)).sort(), ["import_asset", "list_assets", "preview_asset"]);
   assert.ok(projectOnly.every((n) => withAssets.includes(n)));
 });
 

@@ -31,7 +31,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 /** Folders that are scanned for a project (enemies use sv_enemies only in side-view mode). */
-function scannedFolders(sideView: boolean): string[] {
+export function scannedFolders(sideView: boolean): string[] {
   return [
     "img/characters",
     "img/faces",
@@ -63,6 +63,12 @@ async function readData(project: Project, name: string): Promise<unknown | null>
   const file = project.dataFile(name);
   if (!(await project.exists(file))) return null;
   return project.readJson(file);
+}
+
+/** True when System.json switches the project to side-view battles (a missing file means front view). */
+export async function usesSideView(project: Project): Promise<boolean> {
+  const system = await readData(project, "System.json");
+  return isObj(system) && system.optSideView === true;
 }
 
 async function mapIds(project: Project): Promise<number[]> {
@@ -198,9 +204,7 @@ const extLabel = (ext: string[]): string => (ext.length === 1 ? ext[0] : `(${ext
 export async function auditAssets(project: Project, opts: { includeUnused: boolean }): Promise<AssetAudit> {
   const root = project.root;
   const refs = await collectAssetRefs(project);
-  const system = await readData(project, "System.json");
-  const sideView = isObj(system) && system.optSideView === true;
-  const checkedFolders = scannedFolders(sideView);
+  const checkedFolders = scannedFolders(await usesSideView(project));
 
   const listings = new Map<string, string[] | null>();
   const listFolder = async (folder: string): Promise<string[] | null> => {
