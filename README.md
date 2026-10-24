@@ -180,6 +180,24 @@ Groups: `project`, `database`, `maps`, `tiles`, `render`, `plugins`, `playtest`,
 name makes the server exit with a message. `install_skills`, resources and prompts are always
 available whatever the profile.
 
+Tools per group (71 tools, plus `install_skills`, which is always on = 72):
+
+- `project` (2): `set_project`, `get_project_info`
+- `database` (12): `list_records`, `get_record`, `update_record`, `create_record`, `get_system`, `set_switch_name`, `set_variable_name`, `update_system`, `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill`
+- `maps` (11): `list_maps`, `get_map`, `update_map`, `get_event`, `update_event`, `create_event`, `delete_event`, `add_event_command`, `add_dialogue`, `create_map`, `event_command_reference`
+- `tiles` (5): `get_tileset_info`, `get_tileset_image`, `set_map_tileset`, `paint_tiles`, `render_map`
+- `render` (2): `render_map_image`, `render_diff`
+- `plugins` (7): `list_plugins`, `configure_plugin`, `add_plugin`, `remove_plugin`, `create_plugin`, `read_plugin`, `write_plugin`
+- `playtest` (4): `playtest_start`, `playtest_status`, `playtest_log`, `playtest_stop`
+- `search` (2): `search_records`, `search_map_events`
+- `maintenance` (8): `list_backups`, `restore_backup`, `editor_status`, `validate_project`, `begin_changeset`, `commit_changeset`, `discard_changeset`, `undo_changeset`
+- `connect` (2): `connect_maps`, `list_map_connections`
+- `balance` (5): `bulk_update_records`, `generate_param_curve`, `generate_enemy_scaling`, `balance_report`, `simulate_battle`
+- `localization` (2): `export_texts`, `import_texts`
+- `authoring` (2): `build_dialogue_tree`, `create_event_from_template`
+- `generation` (4): `generate_map`, `capture_stamp`, `place_stamp`, `list_stamps`
+- `analysis` (3): `audit_assets`, `lint_events`, `simulate_event`
+
 ### Changesets (transactional edits with undo)
 
 For a multi-step change, wrap it in a changeset instead of letting every call hit the disk:
