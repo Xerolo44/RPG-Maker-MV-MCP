@@ -531,7 +531,7 @@ test("simulate_event reports unknown map, event and page, and rejects bad ids", 
 
 // ---- cutscene and battle commands ----
 
-const COSMETIC_CODES = [205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505];
+const COSMETIC_CODES = [205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 232, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505];
 const withEnd = (list) => [...list, END];
 
 test("a compiled cutscene simulates with nothing unsupported, counts the presentation commands and keeps the message", () => {
@@ -563,6 +563,15 @@ test("every cosmetic code is ignored and counted, none is listed as unsupported"
   assert.equal(sim([END]).cosmetic, 0);
   // Commands skipped by a block are not counted.
   assert.equal(sim([c(111, 0, 0, 1, 0), c(221, 1), c(0, 1), c(412, 0), END]).cosmetic, 0);
+});
+
+test("Move Picture (232) is cosmetic like Show and Erase Picture, not unsupported", () => {
+  const t = sim([c(231, 0, 1, "Pic", 0, 0, 0, 0, 100, 100, 255, 0), c(232, 0, 1, "", 0, 0, 10, 10, 100, 100, 255, 0, 30, true), c(235, 0, 1), END]);
+  assert.deepEqual(t.unsupported, []);
+  assert.equal(t.cosmetic, 3);
+  assert.equal(t.ended, "end");
+  // Rotate (233) and Tint Picture (234) are still not simulated
+  assert.deepEqual(sim([c(233, 0, 1, 5), c(234, 0, 1), END]).unsupported.map((u) => u.code), [233, 234]);
 });
 
 test("the inn template simulates with the fades and wait cosmetic and only recover-all (314) unsupported", () => {
