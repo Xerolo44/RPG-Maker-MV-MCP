@@ -101,7 +101,11 @@ All notable changes to this project are documented here. The format follows
   about 1.2 GB for 5000 events whose commands expanded to about 10 million references.
 - The layouts of the new dialogue nodes (236, 246, the 205/505 move-route shape, the 231
   designation slot, 108/408, 303, 129) come from knowledge of the MV engine, not from engine
-  source. Commands 232-234 and 243/244 are not supported.
+  source. Commands 232-234 and 243/244 are not supported by `build_dialogue_tree`; `find_usages`
+  and `analyze_progression` do read the variable designation of Move Picture (232), using the
+  same parameter layout as 231, which is likewise unverified. That the MV editor writes a Battle
+  Processing (301) without branches when neither box is checked also rests on knowledge of the
+  editor, not on a real project file.
 - No real RPG Maker MV project or engine was available for testing, so nothing in this release was
   run in the real game.
 - The scripted browser playtest runner (`playtest_scenario`) is still **not** included.
