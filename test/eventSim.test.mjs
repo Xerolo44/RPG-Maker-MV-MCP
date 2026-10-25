@@ -612,6 +612,49 @@ test("malformed Set Movement Route parameters never throw and count as cosmetic"
   assert.equal(t.ended, "end");
 });
 
+// ---- move route bounds ----
+
+const routeStep = (code, ...parameters) => ({ code, parameters, indent: null });
+const routeCmd = (list) => c(205, 0, -1, { list, repeat: false, skippable: false, wait: true });
+const alternating = (n) => Array.from({ length: n }, (_, k) => routeStep(k % 2 === 0 ? 27 : 28, 1));
+
+test("a huge move route inside a loop is charged against the step budget and ends stepLimit quickly", () => {
+  const started = Date.now();
+  const t = sim([c(112, 0), routeCmd(alternating(100000)), c(413, 0), END]);
+  assert.equal(t.ended, "stepLimit");
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.ok(t.unsupported.some((u) => u.code === 205 && /1000/.test(u.message)));
+});
+
+test("a route with more than 1000 entries applies switch commands only within the first 1000 and reports the truncation", () => {
+  const list = Array.from({ length: 1500 }, () => routeStep(1));
+  list[999] = routeStep(27, 7); // the 1000th entry: still scanned
+  list[1000] = routeStep(27, 8); // the 1001st: not scanned
+  const t = sim([routeCmd(list), END]);
+  assert.equal(t.finalState.switches[7], true);
+  assert.equal(t.finalState.switches[8], undefined);
+  assert.equal(t.cosmetic, 1);
+  assert.equal(t.unsupported.length, 1);
+  assert.deepEqual([t.unsupported[0].index, t.unsupported[0].code], [0, 205]);
+  assert.match(t.unsupported[0].message, /1000/);
+  assert.equal(t.ended, "end");
+  // Exactly 1000 entries is not truncated.
+  assert.deepEqual(sim([routeCmd(list.slice(0, 1000)), END]).unsupported, []);
+});
+
+test("scanned route entries count against the step budget", () => {
+  // 10 iterations of a 1000-entry route use the whole 10000-step budget.
+  const t = sim([c(112, 0), routeCmd(alternating(1000)), c(413, 0), END]);
+  assert.equal(t.ended, "stepLimit");
+  assert.ok(t.changes.length < 10 * 1000 + 1);
+});
+
+test("move route switch ids are bounded", () => {
+  const t = sim([routeCmd([routeStep(27, 1e21), routeStep(27, 100001), routeStep(27, 100000)]), END]);
+  assert.deepEqual(Object.keys(t.finalState.switches), ["100000"]);
+  assert.deepEqual(t.changes, ["switch 100000 → ON (move route)"]);
+});
+
 // A battle whose branches set variable 1 to 1 (win), 2 (escape) or 3 (lose).
 const battleList = (tree) => withEnd(compileDialogue(tree));
 const fullBattle = battleList([
@@ -645,11 +688,11 @@ test("a battle without the chosen branch is skipped with a note in changes", () 
     { say: "after" },
   ]);
   let t = sim(onlyWin, { battleResult: "lose" });
-  assert.deepEqual(t.changes, ["battle: no lose branch"]);
+  assert.deepEqual(t.changes, ["battle: cannot lose (canLose is false)", "battle: no lose branch"]);
   assert.equal(t.finalState.variables[1], undefined);
   assert.deepEqual(t.messages, ["after"]);
   t = sim(onlyWin, { battleResult: "escape" });
-  assert.deepEqual(t.changes, ["battle: no escape branch"]);
+  assert.deepEqual(t.changes, ["battle: cannot escape (canEscape is false)", "battle: no escape branch"]);
   const bare = sim(battleList([{ battle: { troopId: 1 } }, { say: "after" }]));
   assert.deepEqual(bare.changes, ["battle: no win branch"]);
   assert.deepEqual(bare.messages, ["after"]);
@@ -754,3 +797,18 @@ test("simulate_event battleResult selects the branch and the trace carries cosme
   });
 });
 
+
+test("an impossible battle outcome still runs the branch but notes it", () => {
+  const t = (tree, result) => sim(battleList(tree), { battleResult: result });
+  const noEscape = [{ battle: { troopId: 1, onWin: [{ say: "w" }] } }];
+  assert.deepEqual(t(noEscape, "escape").changes, ["battle: cannot escape (canEscape is false)", "battle: no escape branch"]);
+  assert.deepEqual(t(noEscape, "lose").changes, ["battle: cannot lose (canLose is false)", "battle: no lose branch"]);
+  assert.deepEqual(t(noEscape, "win").changes, []);
+  // A hand-built block with the branch present: it runs, with the note.
+  const list = [c(301, 0, 0, 1, false, false), c(602, 0), c(401, 1, "fled"), c(0, 1), c(604, 0), END];
+  const r = sim(list, { battleResult: "escape" });
+  assert.deepEqual(r.messages, ["fled"]);
+  assert.deepEqual(r.changes, ["battle: cannot escape (canEscape is false)"]);
+  const ok = sim([c(301, 0, 0, 1, true, true), c(603, 0), c(401, 1, "dead"), c(0, 1), c(604, 0), END], { battleResult: "lose" });
+  assert.deepEqual(ok.changes, []);
+});

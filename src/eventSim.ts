@@ -48,6 +48,10 @@ export const MAX_TRACE_ENTRIES = 2000;
 /** Longest switch/variable range one command may touch. */
 const MAX_RANGE = 1000;
 const MAX_ITEMS = 99;
+/** Longest route scanned for switch commands per Set Movement Route; the scanned entries are charged against MAX_STEPS. */
+const MAX_ROUTE_ENTRIES = MAX_RANGE;
+/** Highest switch id a move route may set (Control Switches has no absolute cap, so this keeps finalState keys sane). */
+const MAX_ROUTE_SWITCH_ID = 100000;
 const SELF_SWITCHES = ["A", "B", "C", "D"];
 /** Commands that only change what the player sees or hears; they are skipped and counted in SimTrace.cosmetic. */
 const COSMETIC_CODES = new Set([205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505]);
@@ -222,20 +226,33 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     if (ids.length > 1) change(`${label} ${["=", "+=", "-=", "*=", "/=", "%="][op]} ${value}`);
   }
 
-  /** Set Movement Route: the route is cosmetic, but Switch ON/OFF route commands (27, 28) still change the switches. Malformed routes are ignored. */
-  function moveRoute(p: unknown[]): void {
+  /**
+   * Set Movement Route: the route is cosmetic, but Switch ON/OFF route commands (27, 28) still change the switches.
+   * At most MAX_ROUTE_ENTRIES entries are scanned (a longer route adds one unsupported note) and every scanned entry
+   * costs one step, so total work stays bounded by MAX_STEPS. Returns true when that budget is used up.
+   * Malformed routes are ignored.
+   */
+  function moveRoute(p: unknown[], index: number): boolean {
     const route = p[1];
     const list = typeof route === "object" && route !== null ? (route as { list?: unknown }).list : undefined;
-    if (!Array.isArray(list)) return;
-    for (const step of list) {
+    if (!Array.isArray(list)) return false;
+    const scanned = Math.min(list.length, MAX_ROUTE_ENTRIES);
+    steps += scanned;
+    if (steps > MAX_STEPS) return true;
+    if (list.length > MAX_ROUTE_ENTRIES) {
+      note(index, 205, `move route has ${list.length} entries; only the first ${MAX_ROUTE_ENTRIES} were scanned for switch commands`);
+    }
+    for (let k = 0; k < scanned; k++) {
+      const step = list[k];
       if (typeof step !== "object" || step === null) continue;
       const { code, parameters } = step as { code?: unknown; parameters?: unknown };
       if ((code !== 27 && code !== 28) || !Array.isArray(parameters)) continue;
       const id = parameters[0];
-      if (!isInt(id) || id < 1) continue;
+      if (!isInt(id) || id < 1 || id > MAX_ROUTE_SWITCH_ID) continue;
       s.switches[id] = code === 27;
       change(`switch ${id} → ${code === 27 ? "ON" : "OFF"} (move route)`);
     }
+    return false;
   }
 
   function run(rawList: unknown, depth: number): Signal {
@@ -314,6 +331,9 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           for (let j = index + 1; j < stop; j++) {
             if (cmds[j].indent === c.indent && cmds[j].code === wanted) { target = j; break; }
           }
+          // The caller asked for this outcome, so the branch still runs; the engine could not produce it though.
+          if (battleResult === "escape" && !p[2]) change("battle: cannot escape (canEscape is false)");
+          if (battleResult === "lose" && !p[3]) change("battle: cannot lose (canLose is false)");
           if (target === -1) change(`battle: no ${battleResult} branch`);
           i = target === -1 ? stop : target + 1;
           break;
@@ -405,7 +425,7 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
         default:
           if (COSMETIC_CODES.has(c.code)) {
             trace.cosmetic++;
-            if (c.code === 205) moveRoute(p);
+            if (c.code === 205 && moveRoute(p, index)) return "stepLimit";
           } else {
             note(index, c.code, "command is not simulated");
           }
