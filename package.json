@@ -1,6 +1,6 @@
 {
   "name": "@xerolo44/rpgmaker-mv-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP server for reading, editing, and playtesting RPG Maker MV projects",
   "type": "module",
   "mcpName": "io.github.Xerolo44/rpgmaker-mv-mcp",
