@@ -314,8 +314,8 @@ path separators, and is not a reserved Windows device name (`CON`, `NUL`, `COM1`
 **Backups and changesets.** An existing file with the same name (letter case ignored) is only
 replaced with `overwrite: true`. Like any other edit, the first change to a file in a server session
 snapshots it to `.mcp-backups/` (`list_backups`, `restore_backup`), so the backup holds the file as it was
-before the session: a file that was created, or already replaced, earlier in the same server session has
-no backup of that intermediate version. Binary files cannot be staged, so `import_asset`
+before the session (until `set_project` is called again, which starts the snapshots over): a file that was
+created, or already replaced, earlier in the same server session has no backup of that intermediate version. Binary files cannot be staged, so `import_asset`
 is refused while a changeset is open; commit or discard it first. Nothing is written when an import
 is refused. For audio, a warning tells you when the `.ogg` or `.m4a` twin is missing (MV's web
 build needs both).
@@ -427,7 +427,9 @@ vehicles' start maps. It never models switches turning off and does not detect s
 `find_usages` does not index every command either, and `check_references` sees only what the index
 sees (references made by script or plugin commands, notetags, plugin parameters, damage formulas and
 variable-designated commands are invisible to it); the list is in [CHANGELOG.md](CHANGELOG.md).
-Both tools build the project index in memory: a hostile or machine-generated project with very large
+`check_references` decides that a record exists by its `id` field, not its array position (like
+`find_usages`), so a table whose rows' ids differ from their positions can give wrong answers.
+`find_usages`, `check_references` and `analyze_progression` build the project index in memory: a hostile or machine-generated project with very large
 Control Switches / Variables commands covering whole id ranges can use a lot of memory and time
 (about 1.2 GB were measured for 5000 events expanding to about 10 million references).
 

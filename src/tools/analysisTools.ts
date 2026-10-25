@@ -218,10 +218,10 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
       title: "Check references",
       description:
         "Finds references that point at records which do not exist: a Battle Processing (301) on a missing troop, a shop item (302/605), Change Items/Weapons/Armors (126-128), " +
-        "Learn/Forget Skill (318), Change State (313), Change Party Member (129) and the other actor commands, Common Event calls (117), Transfer Player (201/202) to a missing map, " +
+        "Learn/Forget Skill (318), Change State (313), Change Party Member (129) and the other actor commands, Common Event calls (117), Transfer Player (201) or Set Vehicle Location (202) to a missing map, " +
         "page conditions on a missing item or actor, enemy drops and actions, class learnings, actor class and equipment, troop members, item and skill effects, map encounter lists " +
         "and System startMapId and partyMembers. It uses the same index as find_usages, so it checks exactly the references find_usages lists (staged changeset data included). " +
-        "A record exists when its database file (Items, Weapons, Armors, Skills, States, Actors, Classes, Enemies, Troops, CommonEvents) holds a non-null row with that id, or MapInfos.json lists the map. " +
+        "A record exists when its database file (Items, Weapons, Armors, Skills, States, Actors, Classes, Enemies, Troops, CommonEvents) holds a non-null row whose id field is that id (not its array position, as in find_usages), or MapInfos.json lists the map. " +
         "Id 0 means 'none' (an empty equipment slot, no drop) and is never reported. Switches and variables are not checked (plain numbers; lint_events reports unnamed ones). " +
         "Run it before a release and after deleting or renaming records, and use find_usages on one reported id to see every place. " +
         "Returns {summary, missing: [{kind, id, count, locations, severity: 'error'}], truncated, counts: {distinctMissing, references}, notes}. " +

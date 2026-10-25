@@ -21,6 +21,11 @@ All notable changes to this project are documented here. The format follows
   is missing".
 
 ### Changed
+- The project index reads an actor's equipment slots like the engine: slot 1 is a weapon slot when
+  the actor or its class has the Dual Wield trait (Slot Type, code 55, data 1), and entries beyond
+  the slots in System `equipTypes` are ignored. Before, slot 1 always counted as an armor, so
+  `check_references` and `find_usages` mistook a Dual Wield weapon for an armor. Without a usable
+  `equipTypes` list, every entry still counts.
 - `audit_assets` also scans Change Battle BGM (132), Change Victory ME (133), Change Defeat ME
   (139), Change Vehicle BGM (140), Change Battle Back (283), Change Parallax (284) and Change
   Vehicle Image (323) in map events, common events and troops. Empty names are ignored, as before.
@@ -31,14 +36,19 @@ All notable changes to this project are documented here. The format follows
 - `check_references` only sees what the project index sees. It does not see references made by
   script commands, plugin commands, notetags, plugin parameters, damage formulas or trait codes,
   Transfer Player and Battle Processing commands that name their target by variable, vehicle start
-  maps, the Conditional Branch tests of class, skill, weapon, armor and state, and commands 314,
-  319, 320, 324, 325, 336 and 339 (the same gaps as `find_usages`). A map that cannot be read is
-  skipped. Its `notes` give the number of such commands in the project; switches and variables are
-  not checked at all.
-- A record exists for `check_references` when its database row has that `id` (the id field is what
-  counts, not the position in the array).
+  maps, the Conditional Branch tests of class, skill, weapon, armor and state, the Conditional
+  Branch enemy state test, Control Variables (122) game-data operands (item, weapon, armor and
+  actor counts or parameters), enemy action conditions of type state, and commands 314, 319, 320,
+  324, 325, 336 and 339 (the same gaps as `find_usages`). A map that cannot be read is skipped, and
+  a transfer to it is not reported (it is listed in `MapInfos.json`; `validate_project` reports the
+  missing file). Its `notes` count the script commands, plugin commands and enabled plugins in the
+  project; switches and variables are not checked at all.
+- A record exists for `check_references` when its database row has that `id`: the id field is what
+  counts, not the position in the array (as in `find_usages`), so a table whose rows' ids differ
+  from their positions can give wrong answers.
 - The session backup that `import_asset` with `overwrite` relies on snapshots a file once per
-  server session, before its first change. A file created earlier in the same session (for
+  server session, before its first change (calling `set_project` again starts the snapshots over
+  and replaces the earlier snapshot of a file). A file created earlier in the same session (for
   example by an earlier `import_asset`) and then overwritten has no backup of the version that was
   replaced; the backup holds only the version from before the session. This applies to every
   project file the server writes, not just assets.
