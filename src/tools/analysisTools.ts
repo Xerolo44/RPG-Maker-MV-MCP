@@ -5,6 +5,8 @@ import { auditAssets } from "../assets.js";
 import { lintProject } from "../lint.js";
 import type { Cmd } from "../commandList.js";
 import { pageConditionsHold, simulateEvent, type SimState } from "../eventSim.js";
+import { buildProjectIndex } from "../eventIndex.js";
+import { findUsages, REF_KINDS, resolveTargetName } from "../usages.js";
 import { safe, textResult } from "../util.js";
 
 const LIST_CAP = 200;
@@ -176,6 +178,35 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         },
       });
       return textResult({ ...trace, pageUsed });
+    }),
+  );
+
+  server.registerTool(
+    "find_usages",
+    {
+      title: "Find usages",
+      description:
+        "Lists everywhere one switch, variable, item, weapon, armor, skill, state, actor, class, enemy, troop, common event or map is read, written or used, " +
+        "and warns about dead ends. Use it before renaming, deleting or reusing an id. " +
+        "reads: page conditions, Conditional Branch (111), variable operands and \\V[n] text escapes; writes: Control Switches/Variables (121/122), Change Items/Weapons/Armors (126-128), Change Party Member (129), Change State/Skill (313/318), set-switch route steps; " +
+        "uses: Transfer Player (201), Common Event (117), Battle Processing (301), shops (302/605), actor commands, enemy drops and actions, class learnings, actor equipment, troop members, item/skill effects, map encounter lists, System startMapId and partyMembers. " +
+        "It reads staged changeset data. Each location is a string: 'Map003 event 5 page 1 command index 12', 'CommonEvent 4 command index 7', 'Troop 2 page 1 command index 3', 'Enemies #4 dropItems', 'System startMapId', 'Map003 encounterList'. " +
+        "Map ids, event ids, common event ids and troop ids are the real ids and pages are 1-based like the editor shows them, but 'command index N' is the 0-based position in the command list (the index lint_events reports). " +
+        "A location without a command index is a page condition. counts are the true totals; each list is cut at limit entries and truncated gives the omitted counts. " +
+        "warnings cover: a switch or variable that is read but never set, or set but never read; a common event never called (autorun and parallel common events are exempt); a map nothing transfers to; and an id with no name or record (unknown id, not an error). " +
+        "Script commands (355), plugin commands (356), variable-designated transfers and battles, notetags and plugin parameters are not understood, so every 'never ...' warning carries a note when the project has script or plugin commands (or truncated range commands) that could act on the id. " +
+        "Only the 121/122 ids up to 1000 per command are indexed.",
+      inputSchema: {
+        kind: z.enum(REF_KINDS).describe("What to look up."),
+        id: z.number().int().min(1).describe("Id of the switch, variable, database record, common event or map."),
+        limit: z.number().int().min(1).max(500).default(100).describe("Most locations listed per role (reads, writes, uses)."),
+      },
+    },
+    safe(async ({ kind, id, limit }) => {
+      void project.root; // throws the standard "No project selected" error first
+      const index = await buildProjectIndex(project);
+      const name = await resolveTargetName(project, kind, id);
+      return textResult(findUsages(index, { kind, id }, { limit, name }));
     }),
   );
 }

@@ -290,6 +290,9 @@ await call("audit_assets", {}, (t) => t.includes("Actor1"));
 // lint: the 201 to map 99 added above targets a map that does not exist
 await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
 
+// usage index: switch 1 ("Opened Chest") of the smoke project
+await call("find_usages", { kind: "switch", id: 1 }, (t) => t.includes('"counts"') && t.includes("Opened Chest"));
+
 // map preview as PNG
 {
   const r = await client.callTool({ name: "render_map_image", arguments: { mapId: 1, tileSize: 16, showGrid: true } });
