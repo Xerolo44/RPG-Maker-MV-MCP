@@ -196,6 +196,66 @@ test("collects the documented fields and event commands", async () => {
   });
 });
 
+test("scans commands 132/133/139/140/283/284/323 and ignores empty names", async () => {
+  const data = {
+    "CommonEvents.json": [
+      null,
+      {
+        id: 1,
+        list: [
+          cmd(132, { name: "BattleSong", volume: 90, pan: 0, pitch: 100 }),
+          cmd(133, { name: "WinMe" }),
+          cmd(139, { name: "LoseMe" }),
+          cmd(140, 1, { name: "ShipSong" }),
+          cmd(283, "BackA", "BackB"),
+          cmd(284, "Clouds", true, true, 0, 0),
+          cmd(323, 2, "ShipSheet", 0),
+          cmd(0),
+        ],
+      },
+      {
+        id: 2,
+        list: [
+          cmd(132, { name: "" }),
+          cmd(133, {}),
+          cmd(139),
+          cmd(140, 0, { name: "" }),
+          cmd(283, "", ""),
+          cmd(284, ""),
+          cmd(323, 0, "", 0),
+          cmd(0),
+        ],
+      },
+    ],
+  };
+  await withProject({ data }, async ({ project }) => {
+    const refs = await collectAssetRefs(project);
+    const keys = refs.map((r) => `${r.folder}/${r.name}`).sort();
+    assert.deepEqual(keys, [
+      "audio/bgm/BattleSong", "audio/bgm/ShipSong", "audio/me/LoseMe", "audio/me/WinMe",
+      "img/battlebacks1/BackA", "img/battlebacks2/BackB", "img/characters/ShipSheet", "img/parallaxes/Clouds",
+    ]);
+    assert.deepEqual(refs.find((r) => r.name === "WinMe").ext, [".ogg", ".m4a"]);
+    assert.deepEqual(refs.find((r) => r.name === "Clouds").ext, [".png"]);
+    assert.equal(refs.find((r) => r.name === "ShipSheet").source, "CommonEvent 1");
+  });
+});
+
+test("audit_assets reports the newly scanned commands as missing or satisfied", async () => {
+  const data = {
+    "CommonEvents.json": [
+      null,
+      { id: 1, list: [cmd(133, { name: "WinMe" }), cmd(283, "BackA", "Gone"), cmd(284, "Clouds"), cmd(0)] },
+    ],
+  };
+  const files = ["audio/me/WinMe.ogg", "img/battlebacks1/BackA.png", "img/parallaxes/Clouds.png"];
+  await withProject({ data, files }, async ({ project }) => {
+    const audit = await auditAssets(project, { includeUnused: true });
+    assert.deepEqual(audit.missing, [{ path: "img/battlebacks2/Gone.png", referencedBy: ["CommonEvent 1"] }]);
+    assert.deepEqual(audit.unused, []);
+  });
+});
+
 test("audit_assets before set_project returns the No project selected error", async () => {
   const client = new Client({ name: "assets-test", version: "0.0.0" });
   await client.connect(

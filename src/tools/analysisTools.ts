@@ -6,6 +6,7 @@ import { lintProject } from "../lint.js";
 import type { Cmd } from "../commandList.js";
 import { pageConditionsHold, simulateEvent, type SimState } from "../eventSim.js";
 import { buildProjectIndex } from "../eventIndex.js";
+import { checkReferences } from "../references.js";
 import { findUsages, REF_KINDS, resolveTargetName } from "../usages.js";
 import { safe, textResult } from "../util.js";
 import { registerProgressionTool } from "./progressionTools.js";
@@ -14,7 +15,7 @@ const LIST_CAP = 200;
 
 const NOT_SCANNED = [
   "plugin parameters and script/plugin-command text (355, 356)",
-  "event commands other than 101, 231, 241, 245, 249, 250, 322 (e.g. 261 movie, 283 battle back, 284 parallax)",
+  "event commands other than 101, 132, 133, 139, 140, 231, 241, 245, 249, 250, 283, 284, 322, 323 (e.g. 261 movie)",
   "Animations.json graphics and sounds, Skills/Items animation or icon sheets, Troops battle backs",
   "note tags, img/system, img/animations, fonts, movies, js/ and icons",
 ];
@@ -32,7 +33,7 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         "Checks that every image and audio file the project references exists on disk, and optionally lists files nothing references. " +
         "Scanned references: Actors (characterName, faceName, battlerName); Enemies battlerName (img/enemies, or img/sv_enemies when System optSideView is on); " +
         "Tilesets tilesetNames; Maps (parallaxName, bgm, bgs, battleback1Name, battleback2Name, event page images); " +
-        "event commands 101 (face), 231 (picture), 241/245/249/250 (BGM/BGS/ME/SE) and 322 (actor graphics) in map events, common events and troops; " +
+        "event commands 101 (face), 132/133/139/140 (battle BGM, victory ME, defeat ME, vehicle BGM), 231 (picture), 241/245/249/250 (BGM/BGS/ME/SE), 283 (battle back), 284 (parallax), 322 (actor graphics) and 323 (vehicle image) in map events, common events and troops; " +
         "System (title1Name, title2Name, battleback1Name, battleback2Name, titleBgm, battleBgm, victoryMe, defeatMe, gameoverMe, boat/ship/airship bgm, sounds). " +
         "Anything else is listed under notScanned, so 'unused' can include files used only by plugins or scripts. " +
         "Audio is satisfied by either an .ogg or an .m4a file. caseMismatch means the file exists only with different letter case: " +
@@ -102,7 +103,7 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         "Control Self Switch (123), Change Gold (125), Change Items (126), Transfer Player (201, ends the run) and Plugin Command (356, listed in changes as 'plugin: ...'). " +
         "Battle Processing (301) is not fought: the branch picked by battleResult runs (win, escape or lose; default win) and the others are skipped; a missing branch adds 'battle: no <result> branch' to changes. A Battle Processing without branches (what the editor writes when neither Can Escape nor Continue when Loss is on) is a single command: nothing is skipped and the next command runs. " +
         "Label (118) and Jump to Label (119) work: a jump goes to the first label of that name in the current command list and counts as a step, so a label loop ends 'stepLimit'; a missing label is listed in unsupported and the run continues. " +
-        "Presentation commands (Set Movement Route 205, animation and balloon 212/213, screen fades, tint, flash and shake 221-225, wait 230, show/erase picture 231/235, weather 236, play/fade audio 241/242/245/246/249/250/251, 505 route rows) are ignored and only counted in cosmetic, not listed in unsupported; " +
+        "Presentation commands (Set Movement Route 205, animation and balloon 212/213, screen fades, tint, flash and shake 221-225, wait 230, show/move/erase picture 231/232/235, weather 236, play/fade audio 241/242/245/246/249/250/251, 505 route rows) are ignored and only counted in cosmetic, not listed in unsupported; " +
         "the one exception is the switch ON/OFF steps of a Set Movement Route, which do change the simulated switches (changes: 'switch N → ON (move route)'; only the first 1000 route entries are scanned, each costing one step, and a longer route adds an unsupported note). A battleResult of escape or lose on a battle that cannot be escaped or lost still runs the branch but adds a note to changes. " +
         "Everything else (script 355, other condition types, game-data operands, party and scene commands, ...) is listed in unsupported with its index and skipped; " +
         "an unsupported condition follows unknownCondition: stop (default) ends the run with ended 'unsupported', then/else takes that branch. " +
@@ -208,6 +209,34 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
       const index = await buildProjectIndex(project);
       const name = await resolveTargetName(project, kind, id);
       return textResult(findUsages(index, { kind, id }, { limit, name }));
+    }),
+  );
+
+  server.registerTool(
+    "check_references",
+    {
+      title: "Check references",
+      description:
+        "Finds references that point at records which do not exist: a Battle Processing (301) on a missing troop, a shop item (302/605), Change Items/Weapons/Armors (126-128), " +
+        "Learn/Forget Skill (318), Change State (313), Change Party Member (129) and the other actor commands, Common Event calls (117), Transfer Player (201) or Set Vehicle Location (202) to a missing map, " +
+        "page conditions on a missing item or actor, enemy drops and actions, class learnings, actor class and equipment, troop members, item and skill effects, map encounter lists " +
+        "and System startMapId and partyMembers. It uses the same index as find_usages, so it checks exactly the references find_usages lists (staged changeset data included). " +
+        "A record exists when its database file (Items, Weapons, Armors, Skills, States, Actors, Classes, Enemies, Troops, CommonEvents) holds a non-null row whose id field is that id (not its array position, as in find_usages), or MapInfos.json lists the map. " +
+        "Id 0 means 'none' (an empty equipment slot, no drop) and is never reported. Switches and variables are not checked (plain numbers; lint_events reports unnamed ones). " +
+        "Run it before a release and after deleting or renaming records, and use find_usages on one reported id to see every place. " +
+        "Returns {summary, missing: [{kind, id, count, locations, severity: 'error'}], truncated, counts: {distinctMissing, references}, notes}. " +
+        "missing is grouped by kind and id, ordered by kind (item, weapon, armor, skill, state, actor, class, enemy, troop, commonEvent, map) then id; count is the number of references and locations lists at most 3 of them " +
+        "(same format as find_usages). missing is cut at limit groups and truncated is the number cut. " +
+        "A database file that is missing or unreadable is named in notes and its references are NOT reported as missing. " +
+        "notes also state what is not checked: references made by script commands, plugin commands, notetags, plugin parameters, damage formulas, trait codes and variable-designated transfers and battles " +
+        "(with how many such commands the project has), and maps that could not be read.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(1000).default(100).describe("Most missing records (kind + id groups) returned."),
+      },
+    },
+    safe(async ({ limit }) => {
+      void project.root; // throws the standard "No project selected" error first
+      return textResult(await checkReferences(project, { limit }));
     }),
   );
 

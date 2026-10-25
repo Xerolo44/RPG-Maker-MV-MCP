@@ -3,7 +3,7 @@
 // party and inventory changes, labels, scenes) into an RPG Maker MV event command list with correct
 // indents and block terminators.
 import { z } from "zod";
-import { cmd, type Cmd } from "./commandList.js";
+import { branchEnd, cmd, type Cmd } from "./commandList.js";
 import { shopCommands } from "./shopCommands.js";
 
 export const MAX_DIALOGUE_DEPTH = 8;
@@ -576,6 +576,15 @@ function leafCommands(n: LeafNode, indent: number): Cmd[] {
   return [cmd(205, indent, resolveTarget(m.target), route), ...m.steps.map((step) => cmd(505, indent, routeCommand(step)))];
 }
 
+/**
+ * Compiles the body of a block branch and ends it with the blank row the MV editor writes there: `{code:0}` at the body's
+ * indent, also for an empty branch (which then consists of that row alone). The engine skips code 0 rows.
+ */
+function compileBranch(nodes: readonly DialogueNode[] | undefined, indent: number, depth: number, out: Cmd[]): void {
+  compileNodes(nodes, indent, depth, out);
+  out.push(branchEnd(indent));
+}
+
 function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number, depth: number, out: Cmd[]): void {
   if (!nodes || nodes.length === 0) return;
   if (depth > MAX_DIALOGUE_DEPTH) throw new Error(depthMessage(depth));
@@ -600,16 +609,19 @@ function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number
       out.push(cmd(102, indent, choices.map((c) => c.label), cancelType, 0, 2, 0));
       choices.forEach((c, i) => {
         out.push(cmd(402, indent, i, c.label));
-        compileNodes(c.then, indent + 1, depth + 1, out);
+        compileBranch(c.then, indent + 1, depth + 1, out);
       });
-      if (cancel === "branch") out.push(cmd(403, indent));
+      if (cancel === "branch") {
+        out.push(cmd(403, indent));
+        compileBranch(undefined, indent + 1, depth + 1, out);
+      }
       out.push(cmd(404, indent));
     } else if ("if" in n) {
       out.push(cmd(111, indent, ...conditionParams(n.if)));
-      compileNodes(n.then, indent + 1, depth + 1, out);
+      compileBranch(n.then, indent + 1, depth + 1, out);
       if (n.else !== undefined && n.else.length > 0) {
         out.push(cmd(411, indent));
-        compileNodes(n.else, indent + 1, depth + 1, out);
+        compileBranch(n.else, indent + 1, depth + 1, out);
       }
       out.push(cmd(412, indent));
     } else if ("setSwitch" in n) {
@@ -640,14 +652,14 @@ function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number
       const winBody = b.onWin ?? [];
       if (canEscape || canLose || winBody.length > 0) {
         out.push(cmd(601, indent));
-        compileNodes(winBody, indent + 1, depth + 1, out);
+        compileBranch(winBody, indent + 1, depth + 1, out);
         if (canEscape) {
           out.push(cmd(602, indent));
-          compileNodes(b.onEscape ?? [], indent + 1, depth + 1, out);
+          compileBranch(b.onEscape, indent + 1, depth + 1, out);
         }
         if (canLose) {
           out.push(cmd(603, indent));
-          compileNodes(b.onLose ?? [], indent + 1, depth + 1, out);
+          compileBranch(b.onLose, indent + 1, depth + 1, out);
         }
         out.push(cmd(604, indent));
       }

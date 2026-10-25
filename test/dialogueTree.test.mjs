@@ -57,9 +57,11 @@ test("choices with two entries and cancel disallow", () => {
     cmd(402, 0, 0, "Yes"),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "Great"),
+    cmd(0, 1),
     cmd(402, 0, 1, "No"),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "Pity"),
+    cmd(0, 1),
     cmd(404, 0),
   ]);
 });
@@ -77,8 +79,11 @@ test('cancel "branch" adds a 403 branch before the closing 404', () => {
   assert.deepEqual(list, [
     cmd(102, 0, ["A", "B"], -2, 0, 2, 0),
     cmd(402, 0, 0, "A"),
+    cmd(0, 1),
     cmd(402, 0, 1, "B"),
+    cmd(0, 1),
     cmd(403, 0),
+    cmd(0, 1),
     cmd(404, 0),
   ]);
 });
@@ -88,16 +93,18 @@ test("if/else nests bodies one indent deeper and closes with 412", () => {
   assert.deepEqual(list, [
     cmd(111, 0, 0, 3, 0),
     cmd(121, 1, 4, 4, 0),
+    cmd(0, 1),
     cmd(411, 0),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "no"),
+    cmd(0, 1),
     cmd(412, 0),
   ]);
 });
 
 test("if without else emits no 411", () => {
   const list = valid([{ if: { switch: 3, is: false }, then: [{ say: "x" }] }]);
-  assert.deepEqual(codes(list), [111, 101, 401, 412]);
+  assert.deepEqual(codes(list), [111, 101, 401, 0, 412]);
   assert.deepEqual(list[0].parameters, [0, 3, 1]);
 });
 
@@ -107,7 +114,7 @@ test("a choice body containing an if keeps indent = parent + 2", () => {
   ]);
   assert.deepEqual(
     list.map((c) => [c.code, c.indent]),
-    [[102, 0], [402, 0], [111, 1], [101, 2], [401, 2], [412, 1], [404, 0]],
+    [[102, 0], [402, 0], [111, 1], [101, 2], [401, 2], [0, 2], [412, 1], [0, 1], [404, 0]],
   );
 });
 
@@ -159,7 +166,7 @@ test("raw commands are shifted by the current indent", () => {
   ]);
   assert.deepEqual(
     list.map((c) => [c.code, c.indent]),
-    [[102, 0], [402, 0], [111, 1], [230, 2], [412, 1], [404, 0]],
+    [[102, 0], [402, 0], [111, 1], [230, 2], [412, 1], [0, 1], [404, 0]],
   );
 });
 
@@ -228,7 +235,7 @@ test("presentation nodes compile inside choice and if bodies and keep the block 
   ]);
   assert.deepEqual(
     list.map((c) => [c.code, c.indent]),
-    [[102, 0], [402, 0], [111, 1], [221, 2], [230, 2], [411, 1], [205, 2], [505, 2], [412, 1], [404, 0]],
+    [[102, 0], [402, 0], [111, 1], [221, 2], [230, 2], [0, 2], [411, 1], [205, 2], [505, 2], [0, 2], [412, 1], [0, 1], [404, 0]],
   );
 });
 
@@ -328,12 +335,12 @@ test("build_dialogue_tree inserts into an event page and preserves the terminato
       mapId: 1,
       eventId: 1,
     });
-    assert.equal(body.commands, 6);
-    assert.equal(body.inserted.inserted, 6);
+    assert.equal(body.commands, 8);
+    assert.equal(body.inserted.inserted, 8);
     assert.deepEqual(body.problems, []);
     const map = JSON.parse(await fs.readFile(mapFile, "utf8"));
     const list = map.events[1].pages[0].list;
-    assert.deepEqual(codes(list), [102, 402, 101, 401, 402, 404, 0]);
+    assert.deepEqual(codes(list), [102, 402, 101, 401, 0, 402, 0, 404, 0]);
     assert.deepEqual(validateCommandList(list), []);
   });
 });

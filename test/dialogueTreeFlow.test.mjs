@@ -113,7 +113,7 @@ test("game-flow leaf nodes are indented inside a choice body", () => {
   const list = valid([
     { choices: [{ label: "Buy", then: [{ gold: -10 }, { item: { kind: "item", id: 1, count: 1 } }, { comment: ["a", "b"] }] }] },
   ]);
-  assert.deepEqual(shape(list), [[102, 0], [402, 0], [125, 1], [126, 1], [108, 1], [408, 1], [404, 0]]);
+  assert.deepEqual(shape(list), [[102, 0], [402, 0], [125, 1], [126, 1], [108, 1], [408, 1], [0, 1], [404, 0]]);
 });
 
 // ------------------------------------------------------------------------ shop
@@ -142,7 +142,7 @@ test("shopCommands takes the indent and leaves the template output identical", (
     cmd(605, 2, 2, 2, 1, 5),
   ]);
   assert.deepEqual(shape(valid([{ choices: [{ label: "Shop", then: [{ shop: { goods: [{ type: "item", id: 1 }, { type: "item", id: 2 }] } }] }] }])), [
-    [102, 0], [402, 0], [302, 1], [605, 1], [404, 0],
+    [102, 0], [402, 0], [302, 1], [605, 1], [0, 1], [404, 0],
   ]);
 });
 
@@ -176,12 +176,15 @@ test("battle with all three branches", () => {
     cmd(601, 0),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "Won"),
+    cmd(0, 1),
     cmd(602, 0),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "Ran"),
+    cmd(0, 1),
     cmd(603, 0),
     cmd(101, 1, "", 0, 0, 2),
     cmd(401, 1, "Lost"),
+    cmd(0, 1),
     cmd(604, 0),
   ]);
 });
@@ -191,10 +194,11 @@ test("battle with only onWin; branch order is always win, escape, lose", () => {
     cmd(301, 0, 0, 1, false, false),
     cmd(601, 0),
     cmd(121, 1, 2, 2, 0),
+    cmd(0, 1),
     cmd(604, 0),
   ]);
   const list = compiled({ battle: { troopId: 1, canEscape: true, canLose: true, onLose: [{ exit: true }], onEscape: [{ wait: 5 }] } });
-  assert.deepEqual(shape(list), [[301, 0], [601, 0], [602, 0], [230, 1], [603, 0], [115, 1], [604, 0]]);
+  assert.deepEqual(shape(list), [[301, 0], [601, 0], [0, 1], [602, 0], [230, 1], [0, 1], [603, 0], [115, 1], [0, 1], [604, 0]]);
 });
 
 test("battle without flags or bodies is just the 301, like the editor writes it", () => {
@@ -203,21 +207,21 @@ test("battle without flags or bodies is just the 301, like the editor writes it"
   assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: false, canLose: false } }), [cmd(301, 0, 0, 5, false, false)]);
 });
 
-test("battle with a flag on writes the branches of the checked boxes even when empty, then 604", () => {
+test("battle with a flag on writes the branches of the checked boxes even when empty (one blank row each), then 604", () => {
   assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: true, canLose: true } }), [
-    cmd(301, 0, 0, 5, true, true), cmd(601, 0), cmd(602, 0), cmd(603, 0), cmd(604, 0),
+    cmd(301, 0, 0, 5, true, true), cmd(601, 0), cmd(0, 1), cmd(602, 0), cmd(0, 1), cmd(603, 0), cmd(0, 1), cmd(604, 0),
   ]);
   assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: true } }), [
-    cmd(301, 0, 0, 5, true, false), cmd(601, 0), cmd(602, 0), cmd(604, 0),
+    cmd(301, 0, 0, 5, true, false), cmd(601, 0), cmd(0, 1), cmd(602, 0), cmd(0, 1), cmd(604, 0),
   ]);
   assert.deepEqual(compiled({ battle: { troopId: 5, canLose: true, onLose: [{ exit: true }] } }), [
-    cmd(301, 0, 0, 5, false, true), cmd(601, 0), cmd(603, 0), cmd(115, 1), cmd(604, 0),
+    cmd(301, 0, 0, 5, false, true), cmd(601, 0), cmd(0, 1), cmd(603, 0), cmd(115, 1), cmd(0, 1), cmd(604, 0),
   ]);
 });
 
 test("a branchless battle followed by commands, and a later battle with branches, stay separate blocks", () => {
   const list = valid([{ battle: { troopId: 1 } }, { gold: 5 }, { battle: { troopId: 2, canLose: true, onLose: [{ exit: true }] } }]);
-  assert.deepEqual(shape(list), [[301, 0], [125, 0], [301, 0], [601, 0], [603, 0], [115, 1], [604, 0]]);
+  assert.deepEqual(shape(list), [[301, 0], [125, 0], [301, 0], [601, 0], [0, 1], [603, 0], [115, 1], [0, 1], [604, 0]]);
 });
 
 test("a branch body for a box that is off is rejected with a clear message", () => {
@@ -245,10 +249,14 @@ test("a battle branch containing choices containing an if has exact indents 1/2/
     [402, 1],
     [111, 2],
     [125, 3],
+    [0, 3],
     [411, 2],
     [125, 3],
+    [0, 3],
     [412, 2],
+    [0, 2],
     [404, 1],
+    [0, 1],
     [604, 0],
   ]);
 });
@@ -273,10 +281,14 @@ test("a battle inside a battle branch and inside a choice keeps its block struct
     [601, 2],
     [101, 3],
     [401, 3],
+    [0, 3],
     [604, 2],
+    [0, 2],
     [603, 1],
     [353, 2],
+    [0, 2],
     [604, 1],
+    [0, 1],
     [404, 0],
   ]);
 });
@@ -329,7 +341,7 @@ test("battle branches are reachable through the game-flow tree as a whole cutsce
     { shop: { goods: [{ type: "item", id: 1 }], purchaseOnly: true } },
     { label: "end" },
   ]);
-  assert.deepEqual(list.map((c) => c.code), [221, 301, 601, 125, 126, 602, 119, 604, 302, 118]);
+  assert.deepEqual(list.map((c) => c.code), [221, 301, 601, 125, 126, 0, 602, 119, 0, 604, 302, 118]);
 });
 
 // ------------------------------------------------------------------ rejections
@@ -459,7 +471,7 @@ test("build_dialogue_tree writes a battle + shop tree and rejects an unreachable
     assert.ok(!ok.res.isError, ok.text);
     assert.ok(ok.body.inserted);
     const list = JSON.parse(await fs.readFile(mapFile, "utf8")).events[1].pages[0].list;
-    assert.deepEqual(list.map((c) => c.code), [301, 601, 125, 602, 101, 401, 604, 302, 605, 0]);
+    assert.deepEqual(list.map((c) => c.code), [301, 601, 125, 0, 602, 101, 401, 0, 604, 302, 605, 0]);
     assert.deepEqual(validateCommandList(list), []);
   });
 });

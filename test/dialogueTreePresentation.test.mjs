@@ -235,7 +235,7 @@ test("a moveRoute nested in a choice body is indented with its 505 rows", () => 
   ]);
   assert.deepEqual(
     list.map((c) => [c.code, c.indent]),
-    [[102, 0], [402, 0], [205, 1], [505, 1], [505, 1], [404, 0]],
+    [[102, 0], [402, 0], [205, 1], [505, 1], [505, 1], [0, 1], [404, 0]],
   );
   assert.deepEqual(list[3].parameters, [rc(4)]);
 });
@@ -436,7 +436,7 @@ test("presentation nodes count towards nesting; depth 9 is still rejected and de
   assert.throws(() => compileDialogue([nest(9, { wait: 5 })]), /maximum is 8/);
   assert.deepEqual(
     compileDialogue([nest(8, { fade: "out" })]).map((c) => c.indent),
-    [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0],
+    [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0],
   );
 });
 

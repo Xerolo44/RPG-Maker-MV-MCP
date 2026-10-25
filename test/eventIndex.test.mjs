@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { Project } from "../dist/project.js";
 import { buildProjectIndex, commandRefs, conditionRefs, hiddenKind } from "../dist/eventIndex.js";
+import { checkReferences } from "../dist/references.js";
+import { findUsages } from "../dist/usages.js";
 import { END, c, createFixtureProject, event, page } from "./helpers/fixtureProject.mjs";
 
 const r = (kind, id, role) => ({ kind, id, role });
@@ -726,4 +728,78 @@ test("buildProjectIndex: enabled plugins are counted (Community_Basic and disabl
   const many = await hiddenWithPlugins(pluginsJs(Array.from({ length: 12 }, (_, i) => plugin(`P${i + 1}`, true))));
   assert.equal(many.enabledPlugins, 12);
   assert.deepEqual(many.enabledPluginNames, Array.from({ length: 10 }, (_, i) => `P${i + 1}`));
+});
+
+// ---- actor equipment slots (Dual Wield, System equipTypes) ----
+
+const DUAL = { code: 55, dataId: 1, value: 0 };
+
+/** Actors #1 equips references of a project, as "kind id" strings. */
+async function equipRefs(spec) {
+  let out;
+  await withFixture(spec, async ({ project }) => {
+    const index = await buildProjectIndex(project);
+    out = index.refs.filter((x) => x.where.table === "Actors" && x.where.field === "equips").map((x) => `${x.kind} ${x.id}`);
+  });
+  return out;
+}
+
+const equipSpec = ({ equips, traits = [], classTraits = [], equipTypes, classes }) => ({
+  system: { partyMembers: [], ...(equipTypes === undefined ? {} : { equipTypes }) },
+  actors: [null, { id: 1, classId: 1, equips, traits }],
+  classes: classes ?? [null, { id: 1, learnings: [], traits: classTraits }],
+});
+
+test("equips: slot 0 is a weapon and the other slots are armor without Dual Wield", async () => {
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 7, 0, 3] })), ["weapon 1", "armor 7", "armor 3"]);
+});
+
+test("equips: Dual Wield on the actor makes slot 1 a weapon", async () => {
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 7, 0, 3], traits: [DUAL] })), ["weapon 1", "weapon 7", "armor 3"]);
+});
+
+test("equips: Dual Wield from the class makes slot 1 a weapon", async () => {
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 7], classTraits: [{ code: 55, dataId: 0, value: 0 }, DUAL] })), ["weapon 1", "weapon 7"]);
+  // slot types other than 1 (Dual Wield) do nothing
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 7], traits: [{ code: 55, dataId: 2, value: 0 }] })), ["weapon 1", "armor 7"]);
+});
+
+test("equips: an unreadable Classes.json falls back to the actor's own traits", async () => {
+  const broken = { files: { "Classes.json": "{ not json" } };
+  assert.deepEqual(await equipRefs({ ...equipSpec({ equips: [1, 7], traits: [DUAL] }), ...broken }), ["weapon 1", "weapon 7"]);
+  assert.deepEqual(await equipRefs({ ...equipSpec({ equips: [1, 7], classTraits: [DUAL] }), ...broken }), ["weapon 1", "armor 7"]);
+});
+
+test("equips: slots beyond System equipTypes are ignored", async () => {
+  const equipTypes = ["", "Weapon", "Shield", "Head"]; // 3 slots
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 2, 3, 9, 9], equipTypes })), ["weapon 1", "armor 2", "armor 3"]);
+  // exactly the slots that exist stay; Dual Wield works inside them
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 2, 3, 9], equipTypes, traits: [DUAL] })), ["weapon 1", "weapon 2", "armor 3"]);
+});
+
+test("equips: without a usable equipTypes the old layout is kept", async () => {
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 2, 3, 9] })), ["weapon 1", "armor 2", "armor 3", "armor 9"]);
+  for (const equipTypes of ["x", [], [""]]) {
+    assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 2, 3, 9], equipTypes })), ["weapon 1", "armor 2", "armor 3", "armor 9"], JSON.stringify(equipTypes));
+  }
+});
+
+test("equips: Dual Wield needs at least two slots", async () => {
+  assert.deepEqual(await equipRefs(equipSpec({ equips: [1, 7], equipTypes: ["", "Weapon"], traits: [DUAL] })), ["weapon 1"]);
+});
+
+test("equips: a missing slot-1 weapon under Dual Wield is a missing weapon, and find_usages follows", async () => {
+  const spec = {
+    ...equipSpec({ equips: [1, 7], traits: [DUAL] }),
+    files: { "Weapons.json": [null, { id: 1, name: "Sword" }], "Armors.json": [null], "States.json": [null] },
+    troops: [null],
+
+  };
+  await withFixture(spec, async ({ project }) => {
+    const index = await buildProjectIndex(project);
+    const report = await checkReferences(project, { index });
+    assert.deepEqual(report.missing.map((m) => `${m.kind} ${m.id}`), ["weapon 7"]);
+    assert.deepEqual(findUsages(index, { kind: "weapon", id: 7 }, { limit: 10, name: "x" }).uses, ["Actors #1 equips"]);
+    assert.deepEqual(findUsages(index, { kind: "armor", id: 7 }, { limit: 10, name: "x" }).uses, []);
+  });
 });

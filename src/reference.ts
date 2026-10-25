@@ -5,7 +5,7 @@ export const EVENT_COMMAND_REFERENCE = `RPG Maker MV event command codes (each l
 MESSAGES
 101 Show Text setup: [faceName, faceIndex, background(0 window,1 dim,2 transparent), position(0 top,1 middle,2 bottom)] — followed by one 401 per text line
 401 Text line: ["the text"]
-102 Show Choices: [["Choice A","Choice B"], cancelType, defaultType, positionType, background] — each branch starts with 402 [index, "text"], cancel branch 403, end 404
+102 Show Choices: [["Choice A","Choice B"], cancelType, defaultType, positionType, background] — each branch starts with 402 [index, "text"], cancel branch 403, end 404; the editor ends every branch body with a blank {code:0} row at the body indent (an empty branch is that row alone), which the engine skips and validators accept either way
 103 Input Number: [variableId, digits] — the typed number is stored in the variable
 104 Select Item: [variableId, itemType(1 normal,2 key,3 hidden A,4 hidden B)] — the chosen item id is stored in the variable
 105 Show Scrolling Text: [speed, noFast] — lines follow as 405 ["text"]
@@ -60,7 +60,7 @@ AUDIO / PICTURES
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
-301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — the editor writes branches only when Can Escape or Continue when Loss is on: then 601 If Win, 602 If Escape (with canEscape), 603 If Lose (with canLose), each followed by its body one indent deeper, closed by 604 End of Battle; with both off it is the lone 301 and the commands after it simply run
+301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — the editor writes branches only when Can Escape or Continue when Loss is on: then 601 If Win, 602 If Escape (with canEscape), 603 If Lose (with canLose), each followed by its body one indent deeper, closed by 604 End of Battle (each non-empty body ends with the blank {code:0} row at its indent, like other branches); with both off it is the lone 301 and the commands after it simply run
 302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
 285 Get Location Info: [variableId, infoType(0 terrain tag,1 event id,2-5 tile id of layer 1-4,6 region id), designation(0 direct,1 vars), x, y] — stores the result in the variable; with designation 1 x and y are variable ids

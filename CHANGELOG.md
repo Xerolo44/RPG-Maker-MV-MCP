@@ -4,6 +4,92 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-25
+
+### Added
+- **1 new tool** (78 in total): `check_references` (group `analysis`) finds references that point
+  at records which do not exist: a Battle Processing on a missing troop, a shop item, Learn Skill or
+  Change Items on a missing record, a Common Event call, a transfer to a missing map, a page
+  condition on a missing item or actor, an enemy drop or action, a class learning, an actor's
+  class or equipment, a troop member, an item or skill effect, a map encounter list, System
+  `startMapId` and `partyMembers`. It reads the same project index as `find_usages`, so it checks exactly the references
+  `find_usages` lists, against the rows of the database files and the maps listed in
+  `MapInfos.json`. Findings are grouped by kind and id with a reference count and up to three
+  locations, capped by `limit` (default 100) with `truncated`, and every entry has severity
+  `error`. Id 0 ("none") is never reported, switches and variables are not checked, and a database
+  file that is missing or unreadable is named in `notes` instead of being treated as "everything
+  is missing".
+
+### Changed
+- `build_dialogue_tree` writes the same blank end-of-branch rows as the MV editor: every choice
+  branch (the cancel branch too), every Conditional Branch then and else body and every Battle
+  Processing branch (601/602/603) ends with an empty `{code: 0}` row at the body's indent, and an
+  empty branch consists of that row alone. The engine skips code 0 rows, so playing the event is
+  unchanged. Everything that reads command lists accepts them (`validateCommandList`,
+  `lint_events`, `simulate_event`, the project index, `find_usages`, `analyze_progression`,
+  `check_references`, the `index` insertion rules); `simulate_event` does not count them as steps,
+  so a long loop stops in the same state with or without them. Lists without the rows (older
+  output, hand-written lists, empty branches the editor left bare) stay valid. The
+  `locked_door` and `inn` templates now write the same rows (they share the helper
+  `branchEnd` with the dialogue compiler); the other templates have no blocks.
+- `simulate_event` treats Move Picture (232) as cosmetic, like Show Picture (231) and Erase
+  Picture (235): it is skipped and counted in `cosmetic` instead of being listed as unsupported.
+  Rotate Picture (233) and Tint Picture (234) are still listed as unsupported.
+- The project index reads an actor's equipment slots like the engine: slot 1 is a weapon slot when
+  the actor or its class has the Dual Wield trait (Slot Type, code 55, data 1), and entries beyond
+  the slots in System `equipTypes` are ignored. Before, slot 1 always counted as an armor, so
+  `check_references` and `find_usages` mistook a Dual Wield weapon for an armor. Without a usable
+  `equipTypes` list, every entry still counts.
+- `audit_assets` also scans Change Battle BGM (132), Change Victory ME (133), Change Defeat ME
+  (139), Change Vehicle BGM (140), Change Battle Back (283), Change Parallax (284) and Change
+  Vehicle Image (323) in map events, common events and troops. Empty names are ignored, as before.
+- The `import_asset` description and the README now say precisely when `overwrite` leaves a backup
+  (see Known limitations; the 0.5.0 entry below says it always does, which is not quite true).
+
+### Known limitations
+- `check_references` only sees what the project index sees. It does not see references made by
+  script commands, plugin commands, notetags, plugin parameters, damage formulas or trait codes,
+  Transfer Player and Battle Processing commands that name their target by variable, vehicle start
+  maps, the Conditional Branch tests of class, skill, weapon, armor and state, the Conditional
+  Branch enemy state test, Control Variables (122) game-data operands (item, weapon, armor and
+  actor counts or parameters), enemy action conditions of type state, and commands 314, 319, 320,
+  324, 325, 336 and 339 (the same gaps as `find_usages`). A map that cannot be read is skipped, and
+  a transfer to it is not reported (it is listed in `MapInfos.json`; `validate_project` reports the
+  missing file). Its `notes` count the script commands, plugin commands and enabled plugins in the
+  project; switches and variables are not checked at all.
+- A record exists for `check_references` when its database row has that `id`: the id field is what
+  counts, not the position in the array (as in `find_usages`), so a table whose rows' ids differ
+  from their positions can give wrong answers.
+- The session backup that `import_asset` with `overwrite` relies on snapshots a file once per
+  server session, before its first change (calling `set_project` again starts the snapshots over
+  and replaces the earlier snapshot of a file). A file created earlier in the same session (for
+  example by an earlier `import_asset`) and then overwritten has no backup of the version that was
+  replaced; the backup holds only the version from before the session. This applies to every
+  project file the server writes, not just assets.
+- Checked against the official core scripts (`rpgtkoolmv/corescript`, `Game_Interpreter`,
+  `Game_Actor`, `Game_BattlerBase`, `Game_Character`): the parameter layouts of the newly scanned
+  commands (132, 133, 139, 140, 283, 284, 323), of the 0.5.0 dialogue nodes (125-129, 212/213,
+  205 (its route object), 223-225, 230, 231/232 incl. the variable designation of 232, 235, 236, 242, 246, 301 and its
+  branches, 302/605, 303, 313, 314, 318, 351-354, 356, 108/408, 115, 117-119) and of the
+  move-route codes, plus the Dual Wield and `equipTypes` handling of actor equipment. That is
+  engine source.
+- Checked against real data (16 map files from public MV projects, read only, not included in this
+  repository): a Battle Processing with neither box checked is a lone 301 followed directly by the
+  next command (3 samples), and with a box checked it is 301, 601, body, 602, body, 603, body, 604;
+  in 97 real Set Movement Route commands the number of 505 rows equals the number of route steps
+  (without the final `{code: 0}`), each 505 has the indent of its 205 and holds the step object in
+  its first parameter; and every non-empty block body ended with the blank `{code: 0}` row
+  described above (32 of 32), an empty branch being that row alone. Real step objects often omit
+  `parameters` and `indent` for parameterless steps, while ours carry `parameters: []` and
+  `indent: null`; both are valid and both are accepted. `validateCommandList` accepted 266 of the
+  268 real command lists. The two it rejected (one project) have a Battle Processing whose 604
+  closer is missing, which `validateCommandList` and `lint_events` report as a block-structure
+  error. The real data also contained 3 empty branches without the blank row; they stay accepted.
+  Still unchecked: the 0.5.0 dialogue-node commands not listed above, and nothing was run in the
+  real game.
+- As in 0.5.0, no real RPG Maker MV project or editor was available: nothing in this release was
+  run in the real game. The limitations of 0.5.0 and 0.4.0 below still apply.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

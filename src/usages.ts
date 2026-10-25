@@ -152,7 +152,8 @@ export function findUsages(
   };
 }
 
-const TABLES: Partial<Record<RefKind, string>> = {
+/** Database file (in data/) that holds the records of each kind; switches and variables have none. */
+export const TABLES: Partial<Record<RefKind, string>> = {
   item: "Items.json",
   weapon: "Weapons.json",
   armor: "Armors.json",
@@ -168,28 +169,46 @@ const TABLES: Partial<Record<RefKind, string>> = {
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** Loads a data file (staged edits included); a missing, unreadable or invalid file gives undefined. */
+async function readData(project: Project, file: string): Promise<unknown> {
+  try {
+    return await project.readJson(project.dataFile(file));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The rows of the database file (or MapInfos.json) that holds `kind`, staged edits included. undefined when the kind
+ * has no table (switch, variable) or the file is missing, unreadable or not an array.
+ */
+export async function readRecordTable(project: Project, kind: RefKind): Promise<unknown[] | undefined> {
+  const file = TABLES[kind];
+  const records = file === undefined ? undefined : await readData(project, file);
+  return Array.isArray(records) ? records : undefined;
+}
+
+/** Ids of the records that exist in a table: every object row with an integer `id` (null rows and junk are skipped). */
+export function recordIds(records: unknown[]): Set<number> {
+  const ids = new Set<number>();
+  for (const r of records) if (isObj(r) && typeof r.id === "number" && Number.isInteger(r.id)) ids.add(r.id);
+  return ids;
+}
+
 /**
  * Display name of a target from the project data (staged edits included): database arrays, MapInfos.json, or
  * System.json `switches`/`variables`. undefined when the id has no record (or the file is missing or unreadable);
  * an empty string when the record exists without a name.
  */
 export async function resolveTargetName(project: Project, kind: RefKind, id: number): Promise<string | undefined> {
-  const read = async (file: string): Promise<unknown> => {
-    try {
-      return await project.readJson(project.dataFile(file));
-    } catch {
-      return undefined;
-    }
-  };
   if (kind === "switch" || kind === "variable") {
-    const system = await read("System.json");
+    const system = await readData(project, "System.json");
     const names = isObj(system) ? system[kind === "switch" ? "switches" : "variables"] : undefined;
     if (!Array.isArray(names) || id >= names.length) return undefined;
     return typeof names[id] === "string" ? names[id] : "";
   }
-  const file = TABLES[kind];
-  const records = file === undefined ? undefined : await read(file);
-  if (!Array.isArray(records)) return undefined;
+  const records = await readRecordTable(project, kind);
+  if (records === undefined) return undefined;
   const record = records.find((r) => isObj(r) && r.id === id);
   if (!isObj(record)) return undefined;
   return typeof record.name === "string" ? record.name : "";

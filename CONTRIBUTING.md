@@ -35,7 +35,8 @@ src/
 ├── dialogueTree.ts          dialogue tree to event commands compiler (build_dialogue_tree, pure)
 ├── shopCommands.ts          302/605 shop command builder shared by dialogueTree and eventTemplates (leaf module)
 ├── eventIndex.ts            project-wide event page and reference index (reads through Project)
-├── usages.ts                find_usages queries and warnings over the index
+├── usages.ts                find_usages queries and warnings over the index; record tables and ids
+├── references.ts            check_references: dangling references over the index (reads through Project)
 ├── progression.ts           analyze_progression fixpoint and map graph over the index (pure)
 ├── eventTemplates.ts        chest/door/inn/shop/save point/NPC templates (create_event_from_template, pure)
 ├── mapDiff.ts               tile and event diff between two map files (render_diff, pure)
@@ -71,7 +72,7 @@ src/
     ├── playtestTools.ts     NW.js / browser playtesting
     ├── maintenanceTools.ts  backups, editor_status and project validation
     ├── changesetTools.ts    begin/commit/discard/undo_changeset
-    ├── analysisTools.ts     audit_assets, lint_events, simulate_event, find_usages
+    ├── analysisTools.ts     audit_assets, lint_events, simulate_event, find_usages, check_references
     └── progressionTools.ts  analyze_progression (registered from analysisTools.ts)
 skills/                      bundled SKILL.md workflow guides (shipped in the npm package)
 scripts/

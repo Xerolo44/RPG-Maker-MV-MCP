@@ -54,7 +54,7 @@ const MAX_ROUTE_ENTRIES = MAX_RANGE;
 const MAX_ROUTE_SWITCH_ID = 100000;
 const SELF_SWITCHES = ["A", "B", "C", "D"];
 /** Commands that only change what the player sees or hears; they are skipped and counted in SimTrace.cosmetic. */
-const COSMETIC_CODES = new Set([205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505]);
+const COSMETIC_CODES = new Set([205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 232, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505]);
 /** Battle Processing branch opener per battleResult. */
 const BATTLE_BRANCH = { win: 601, escape: 602, lose: 603 } as const;
 /** Code of the stand-in for an entry that is not a usable command. */
@@ -259,7 +259,9 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     const cmds = normalize(rawList);
     let i = 0;
     while (i < cmds.length) {
-      if (++steps > MAX_STEPS) return "stepLimit";
+      // Code 0 rows (the terminator and the blank row the editor writes at the end of each branch) do nothing and are
+      // not steps, so they cannot change where a long loop stops.
+      if (cmds[i].code !== 0 && ++steps > MAX_STEPS) return "stepLimit";
       const c = cmds[i];
       const p = c.parameters;
       const index = i;
