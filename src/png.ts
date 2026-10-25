@@ -73,7 +73,15 @@ function paeth(a: number, b: number, c: number): number {
 /** Bytes of trailing data tolerated after the image data when inflating. */
 const INFLATE_SLACK = 4096;
 
-export function decodePng(buf: Buffer): Bitmap {
+/** Largest image decodePng accepts when the caller names no limit. */
+const DEFAULT_MAX_PIXELS = 64_000_000;
+
+/**
+ * Decodes a non-interlaced PNG. The image header must be the first chunk and may appear only once (PNG spec), so
+ * the size that is checked is the size that is decoded. `maxPixels` (default 64 million) refuses larger images
+ * before anything is inflated.
+ */
+export function decodePng(buf: Buffer, maxPixels: number = DEFAULT_MAX_PIXELS): Bitmap {
   if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("Not a PNG file.");
   let width = 0;
   let height = 0;
@@ -85,12 +93,17 @@ export function decodePng(buf: Buffer): Bitmap {
   const idat: Buffer[] = [];
 
   let pos = 8;
+  let seenHeader = false;
   while (pos + 8 <= buf.length) {
     const length = buf.readUInt32BE(pos);
     const type = buf.toString("ascii", pos + 4, pos + 8);
     const data = buf.subarray(pos + 8, pos + 8 + length);
     pos += 12 + length;
+    if (!seenHeader && type !== "IHDR") throw new PngError("PNG does not start with an image header.");
     if (type === "IHDR") {
+      if (seenHeader) throw new PngError("PNG has a second image header.");
+      seenHeader = true;
+      if (length !== 13) throw new PngError("PNG image header has the wrong length.");
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
       depth = data[8];
@@ -108,7 +121,7 @@ export function decodePng(buf: Buffer): Bitmap {
     throw new PngError(`Unsupported PNG format (color type ${colorType}, ${depth}-bit).`);
   }
   if (colorType === 3 && !palette) throw new PngError("Palette PNG without a palette.");
-  if (width * height > 64_000_000) throw new PngError("PNG is too large.");
+  if (width * height > maxPixels) throw new PngError("PNG is too large.");
 
   const bitsPerPixel = channels * depth;
   const bpp = Math.max(1, bitsPerPixel >> 3);
@@ -217,6 +230,8 @@ export function pngInfo(buf: Buffer): { width: number; height: number } {
   if (!width || !height || width > 0x7fffffff || height > 0x7fffffff) {
     throw new PngError("PNG header has invalid dimensions.");
   }
+  // The next chunk starts at byte 33; a second IHDR there makes the dimensions above untrustworthy.
+  if (buf.length >= 41 && buf.toString("ascii", 37, 41) === "IHDR") throw new PngError("PNG has a second image header.");
   return { width, height };
 }
 

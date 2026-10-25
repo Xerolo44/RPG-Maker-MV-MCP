@@ -126,3 +126,47 @@ test("pngIsInterlaced reads the IHDR interlace byte from the first 29 bytes", ()
   assert.equal(pngIsInterlaced(adam7.subarray(0, 20)), false);
   assert.equal(pngIsInterlaced(Buffer.from("not a png at all, really, no")), false);
 });
+
+// ---- decodePng: header rules ----
+
+/** A PNG whose chunks are the given [type, data] pairs (zero CRCs: decodePng does not check them). */
+function pngOfChunks(chunks) {
+  const parts = [Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])];
+  for (const [type, data] of chunks) {
+    const out = Buffer.alloc(data.length + 12);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "ascii");
+    data.copy(out, 8);
+    parts.push(out);
+  }
+  return Buffer.concat(parts);
+}
+const ihdrOf = (width, height) => {
+  const b = Buffer.alloc(13);
+  b.writeUInt32BE(width, 0);
+  b.writeUInt32BE(height, 4);
+  b[8] = 8;
+  b[9] = 6;
+  return b;
+};
+
+test("decodePng and pngInfo reject a second IHDR (a 2x2 header followed by a 6000x6000 one), quickly", () => {
+  const idat = zlib.deflateSync(Buffer.alloc(2 * (2 * 4 + 1)));
+  const file = pngOfChunks([["IHDR", ihdrOf(2, 2)], ["IHDR", ihdrOf(6000, 6000)], ["IDAT", idat], ["IEND", Buffer.alloc(0)]]);
+  const started = Date.now();
+  assert.throws(() => decodePng(file), (e) => e instanceof PngError && /second image header/.test(e.message));
+  assert.throws(() => pngInfo(file.subarray(0, 64)), (e) => e instanceof PngError && /second image header/.test(e.message));
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("decodePng rejects a PNG whose first chunk is not IHDR, or whose IHDR has the wrong length", () => {
+  const idat = zlib.deflateSync(Buffer.alloc(9));
+  assert.throws(() => decodePng(pngOfChunks([["tEXt", Buffer.from("a\0b")], ["IHDR", ihdrOf(1, 1)], ["IDAT", idat]])), (e) => e instanceof PngError && /start with an image header/.test(e.message));
+  assert.throws(() => decodePng(pngOfChunks([["IHDR", ihdrOf(1, 1).subarray(0, 8)], ["IDAT", idat]])), (e) => e instanceof PngError && /wrong length/.test(e.message));
+});
+
+test("decodePng honours maxPixels", () => {
+  const png = encodePng(solid(100, 100));
+  assert.equal(decodePng(png, 10_000).width, 100);
+  assert.throws(() => decodePng(png, 9_999), (e) => e instanceof PngError && /too large/.test(e.message));
+});

@@ -264,7 +264,7 @@ export function registerAssetTools(server: McpServer, project: Project): void {
         if (width * height > MAX_PREVIEW_PIXELS) {
           throw new ProjectError(`Cannot preview ${label}: image is too large to preview (${width}x${height}); the limit is ${MAX_PREVIEW_PIXELS / 1_000_000} million pixels.`);
         }
-        bitmap = decodePng(bytes);
+        bitmap = decodePng(bytes, MAX_PREVIEW_PIXELS);
       } catch (err) {
         if (err instanceof ProjectError) throw err;
         throw new ProjectError(`Cannot preview ${label}: ${err instanceof PngError ? err.message : "the image data is corrupt."}`);

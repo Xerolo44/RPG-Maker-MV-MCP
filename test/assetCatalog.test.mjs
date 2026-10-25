@@ -430,3 +430,47 @@ test("preview_asset on a PNG whose IDAT inflates far past its header fails fast"
     assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
   });
 });
+
+// A PNG whose first IHDR says 2x2 and whose second says 6000x6000 (invalid per the PNG spec).
+function doubleHeaderPng() {
+  const chunkOf = (type, data) => {
+    const out = Buffer.alloc(data.length + 12);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "ascii");
+    data.copy(out, 8);
+    return out;
+  };
+  const ihdr = (w, h) => {
+    const b = Buffer.alloc(13);
+    b.writeUInt32BE(w, 0);
+    b.writeUInt32BE(h, 4);
+    b[8] = 8;
+    b[9] = 6;
+    return b;
+  };
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunkOf("IHDR", ihdr(2, 2)),
+    chunkOf("IHDR", ihdr(6000, 6000)),
+    chunkOf("IDAT", Buffer.alloc(8)),
+    chunkOf("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+test("list_assets does not report a PNG with a second IHDR as a clean 2x2, and preview_asset refuses it", async () => {
+  await withProject({}, async ({ dir, project }) => {
+    await put(dir, "img/pictures/Twice.png", doubleHeaderPng());
+    const res = await listAssets(project, { folder: "img/pictures", includeUsage: false, limit: 200 });
+    const entry = res.folders[0].files[0];
+    assert.equal(entry.width, undefined);
+    assert.ok(entry.warnings.some((w) => /Unreadable PNG header/.test(w)), JSON.stringify(entry));
+  });
+  await withServer(async ({ dir, raw }) => {
+    await put(dir, "img/pictures/Twice.png", doubleHeaderPng());
+    const started = Date.now();
+    const r = await raw("preview_asset", { folder: "img/pictures", name: "Twice" });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /second image header/);
+    assert.ok(Date.now() - started < 5000);
+  });
+});

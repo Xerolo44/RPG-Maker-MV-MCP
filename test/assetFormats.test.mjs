@@ -147,3 +147,16 @@ test("inspectAsset: a !$ character sheet is judged as a single-character sheet",
   assert.equal(inspectAsset("img/characters", "!Door", png(96, 128), 500).warnings.length, 0); // 96/12, 128/8 divide
   assert.equal(inspectAsset("img/characters", "!Door", png(100, 128), 500).warnings.length, 1);
 });
+
+test("inspectAsset refuses a PNG whose header is followed by a second IHDR", () => {
+  const good = encodePng({ width: 2, height: 2, data: new Uint8Array(16) });
+  // Insert a second IHDR chunk (type bytes are what matters) right after the first.
+  const second = Buffer.alloc(25);
+  second.writeUInt32BE(13, 0);
+  second.write("IHDR", 4, "ascii");
+  second.writeUInt32BE(6000, 8);
+  second.writeUInt32BE(6000, 12);
+  const bad = Buffer.concat([good.subarray(0, 33), second, good.subarray(33)]);
+  assert.throws(() => inspectAsset("img/pictures", "X", bad, bad.length), /second image header/);
+  assert.doesNotThrow(() => inspectAsset("img/pictures", "X", good, good.length));
+});
