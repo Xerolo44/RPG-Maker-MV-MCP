@@ -259,7 +259,9 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     const cmds = normalize(rawList);
     let i = 0;
     while (i < cmds.length) {
-      if (++steps > MAX_STEPS) return "stepLimit";
+      // Code 0 rows (the terminator and the blank row the editor writes at the end of each branch) do nothing and are
+      // not steps, so they cannot change where a long loop stops.
+      if (cmds[i].code !== 0 && ++steps > MAX_STEPS) return "stepLimit";
       const c = cmds[i];
       const p = c.parameters;
       const index = i;
