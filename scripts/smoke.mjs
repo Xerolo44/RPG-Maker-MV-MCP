@@ -79,6 +79,11 @@ async function call(name, args, check) {
 
 const tools = await client.listTools();
 console.log(`server exposes ${tools.tools.length} tools`);
+{
+  const countOk = tools.tools.length === 78;
+  console.log(`${countOk ? "PASS" : "FAIL"} server exposes 78 tools`);
+  if (!countOk) failures++;
+}
 
 await call("set_project", { path: tmp }, (t) => t.includes("Project set"));
 await call("get_project_info", {}, (t) => t.includes("Smoke Test Quest"));
@@ -292,6 +297,8 @@ await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
 
 // usage index: switch 1 ("Opened Chest") of the smoke project
 await call("find_usages", { kind: "switch", id: 1 }, (t) => t.includes('"counts"') && t.includes("Opened Chest"));
+// dangling references: the 201 to map 99 added above names a map that is not in MapInfos
+await call("check_references", {}, (t) => t.includes('"distinctMissing"') && t.includes('"kind": "map"') && t.includes('"id": 99'));
 await call("analyze_progression", { includeGraph: true }, (t) => t.includes('"reachableMaps"') && t.includes("flowchart LR"));
 
 // map preview as PNG

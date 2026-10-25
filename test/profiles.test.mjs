@@ -66,7 +66,7 @@ test("no flag serves every tool", async () => {
 test("--tools analysis serves audit_assets and lint_events but not maintenance tools", async () => {
   await withServer(["--tools", "analysis"], {}, async (client) => {
     const names = await toolNames(client);
-    for (const n of ["audit_assets", "lint_events"]) assert.ok(names.includes(n), n);
+    for (const n of ["audit_assets", "lint_events", "check_references"]) assert.ok(names.includes(n), n);
     for (const n of ["editor_status", "begin_changeset"]) assert.ok(!names.includes(n), n);
   });
 });
