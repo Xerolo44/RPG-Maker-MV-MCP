@@ -36,7 +36,8 @@ All notable changes to this project are documented here. The format follows
   shake, weather, waits, audio, pictures, animations, balloons, move routes) are skipped and
   counted in the new `cosmetic` field instead of being listed as unsupported; the new
   `battleResult` input (`win`, `escape` or `lose`, default `win`) picks the Battle Processing
-  branch that runs; labels and jumps (118/119) work; and the switch ON/OFF steps of a Set Movement
+  branch that runs (a Battle Processing without branches changes nothing and the next command
+  runs); labels and jumps (118/119) work; and the switch ON/OFF steps of a Set Movement
   Route change the simulated switches.
 - `Project.writeBinary`, the write path for binary files (session backup, tracked by
   `editor_status`); PNG header helpers (`pngInfo`, `pngIsInterlaced`) in `src/png.ts`; and the
@@ -50,7 +51,8 @@ All notable changes to this project are documented here. The format follows
   leading run of `!` and `$` characters contains a `$` (`$Boss`, `!$Chest`) is a single-character
   sheet. Before, only names starting with `$` were.
 - `decodePng` rejects PNG data that inflates to more than its header allows (a PNG with more than
-  4096 trailing bytes after the image data is now rejected).
+  4096 trailing bytes after the image data is now rejected), a PNG whose IHDR is not the first
+  chunk, and a second IHDR; it takes an optional `maxPixels` limit (default 64 million).
 - Reserved Windows device names `COM0`-`COM9` and `LPT0`-`LPT9` are rejected in asset names.
 - `src/reference.ts` (the event command reference, also served as a resource and by
   `event_command_reference`) documents more commands or more exact layouts: 103, 104, 108/408,
@@ -72,7 +74,9 @@ All notable changes to this project are documented here. The format follows
   symbolic link), the size cap is checked before the file is read, the file type must match the
   folder by its header bytes, nothing is written when an import is refused, and it refuses to run
   inside an open changeset.
-- `preview_asset` refuses images above 16 million pixels, before decoding them.
+- `preview_asset` refuses images above 16 million pixels: the header size is checked first and the
+  decoder enforces the same limit itself. `list_assets` and `import_asset` read the size from the
+  first IHDR only, and refuse (or flag as unreadable) a PNG that has a second IHDR right after it.
 
 ### Known limitations
 - `analyze_progression` is an over-approximation. It ignores conditions inside event commands,
@@ -88,6 +92,13 @@ All notable changes to this project are documented here. The format follows
   file with an `ftyp` header is accepted as `.m4a`. It does not convert or resize, does not run
   inside a changeset, and follows symlinks inside the project like all other writes.
 - `list_assets` marks files as unused by exact (case-sensitive) name.
+- Damage formulas are evaluated JavaScript and can set switches and variables (for example through
+  `$gameSwitches`); they are not analysed, so `analyze_progression` can report `confidence: high`
+  while a formula changes state.
+- The project index is built in memory. A hostile or machine-generated project with very large
+  Control Switches / Control Variables (121/122) commands covering whole id ranges can use a lot of
+  memory and time in `find_usages` and `analyze_progression`: a review measured
+  about 1.2 GB for 5000 events whose commands expanded to about 10 million references.
 - The layouts of the new dialogue nodes (236, 246, the 205/505 move-route shape, the 231
   designation slot, 108/408, 303, 129) come from knowledge of the MV engine, not from engine
   source. Commands 232-234 and 243/244 are not supported.

@@ -405,15 +405,20 @@ whenever its page conditions could hold, and when it runs all of its commands ta
 only ever turn on and items are never lost. So *unreachable* and *never set* are proofs under that
 model, while *reachable* only means "not ruled out".
 
-**What it cannot see.** Conditions inside event commands (branches, choices), script commands and
+**What it cannot see.** Conditions inside event commands (branches, choices), damage formulas (they are
+evaluated JavaScript and can set switches and variables), script commands and
 plugin commands, transfers and battles whose target is a variable, enabled plugins and their
 parameters and notetags (they can call common events, set switches or move the player), and
 vehicles' start maps. It never models switches turning off and does not detect soft-locks.
 `find_usages` does not index every command either; the list is in [CHANGELOG.md](CHANGELOG.md).
+Both tools build the project index in memory: a hostile or machine-generated project with very large
+Control Switches / Variables commands covering whole id ranges can use a lot of memory and time
+(about 1.2 GB were measured for 5000 events expanding to about 10 million references).
 
-**Confidence.** `uncertainty.confidence` is `low` as soon as the project contains any of the
-things it cannot see (or a map or `js/plugins.js` it could not read), and the summary says why.
-Trust *unreachable* and *dead* results only when it is `high`; almost every project with custom
+**Confidence.** `uncertainty.confidence` is `low` as soon as the project contains script or plugin
+commands, variable-designated transfers or battles, or enabled plugins (or a map or `js/plugins.js`
+it could not read), and the summary says why. It stays `high` when only conditions inside commands
+or damage formulas do something the analysis cannot see. Trust *unreachable* and *dead* results only when it is `high`; almost every project with custom
 plugins reports `low`. The same applies to the "never ..." warnings of `find_usages`, which carry a
 note when script or plugin commands could act on the id.
 
