@@ -51,7 +51,12 @@ export function scannedFolders(sideView: boolean): string[] {
   ];
 }
 
+/** Audio folder of the event commands whose first parameter is an audio object (140 has it second, see scanList). */
 const AUDIO_FOLDER: Record<string, string> = {
+  132: "audio/bgm",
+  133: "audio/me",
+  139: "audio/me",
+  140: "audio/bgm",
   241: "audio/bgm",
   245: "audio/bgs",
   249: "audio/me",
@@ -110,11 +115,27 @@ export async function collectAssetRefs(project: Project): Promise<AssetRef[]> {
         case 231:
           add("img/pictures", IMG, p[1], source);
           break;
+        case 132: // Change Battle BGM [audio]
+        case 133: // Change Victory ME [audio]
+        case 139: // Change Defeat ME [audio]
         case 241:
         case 245:
         case 249:
         case 250:
           addAudio(AUDIO_FOLDER[c.code as number], p[0], source);
+          break;
+        case 140: // Change Vehicle BGM [vehicleType, audio]
+          addAudio(AUDIO_FOLDER[140], p[1], source);
+          break;
+        case 283: // Change Battle Back [battleback1, battleback2]
+          add("img/battlebacks1", IMG, p[0], source);
+          add("img/battlebacks2", IMG, p[1], source);
+          break;
+        case 284: // Change Parallax [name, loopX, loopY, scrollX, scrollY]
+          add("img/parallaxes", IMG, p[0], source);
+          break;
+        case 323: // Change Vehicle Image [vehicleType, name, index]
+          add("img/characters", IMG, p[1], source);
           break;
         case 322:
           add("img/characters", IMG, p[1], source);
