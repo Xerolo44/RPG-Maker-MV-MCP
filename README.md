@@ -352,8 +352,8 @@ Example, as the `tree` argument (or with `dryRun: true` to only look at the comm
 
 `simulate_event` can dry-run the result: presentation commands are skipped and counted in
 `cosmetic`, and `battleResult` (`win`, `escape` or `lose`) chooses which battle branch runs. The
-command layouts come from knowledge of the MV engine, not from its source, so playtest important
-events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
+command layouts were checked against the official MV core scripts, but no real project or editor
+was available, so playtest important events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
 
 ## Analysis
 

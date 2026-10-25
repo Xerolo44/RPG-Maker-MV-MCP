@@ -52,9 +52,17 @@ All notable changes to this project are documented here. The format follows
   example by an earlier `import_asset`) and then overwritten has no backup of the version that was
   replaced; the backup holds only the version from before the session. This applies to every
   project file the server writes, not just assets.
-- The parameter layouts of the newly scanned commands (132, 133, 139, 140, 283, 284, 323) come from
-  knowledge of the MV engine, not from engine source or a real project file, and are unverified.
-- As in 0.5.0, no real RPG Maker MV project or engine was available: nothing in this release was
+- Checked against the official core scripts (`rpgtkoolmv/corescript`, `Game_Interpreter`,
+  `Game_Actor`, `Game_BattlerBase`, `Game_Character`): the parameter layouts of the newly scanned
+  commands (132, 133, 139, 140, 283, 284, 323), of the 0.5.0 dialogue nodes (125-129, 212/213,
+  205 (its route object), 223-225, 230, 231/232 incl. the variable designation of 232, 235, 236, 242, 246, 301 and its
+  branches, 302/605, 303, 313, 314, 318, 351-354, 356, 108/408, 115, 117-119) and of the
+  move-route codes, plus the Dual Wield and `equipTypes` handling of actor equipment. That is
+  engine source, not a real project. What is still unchecked: what the RPG Maker MV *editor*
+  writes (in particular a Battle Processing without branches when neither box is checked, and the
+  `505` rows of a move route, which the engine ignores) and the 0.5.0 dialogue-node commands not
+  listed here.
+- As in 0.5.0, no real RPG Maker MV project or editor was available: nothing in this release was
   run in the real game. The limitations of 0.5.0 and 0.4.0 below still apply.
 
 ## [0.5.0] - 2026-10-25
