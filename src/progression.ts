@@ -232,6 +232,17 @@ const byNumber = (a: number, b: number): number => a - b;
 
 /** `maxContexts` overrides MAX_CONTEXTS (tests use a small value). */
 export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; limit: number; maxContexts?: number }): ProgressionReport {
+  return analyzeProgressionDetailed(index, opts).report;
+}
+
+/**
+ * Like analyzeProgression, plus `listsCut`: true only when a list was really cut at `limit`. `report.truncated` is also
+ * true when an analysis cap was hit (round limit, call-context overflow), where raising `limit` changes nothing.
+ */
+export function analyzeProgressionDetailed(
+  index: ProjectIndex,
+  opts: { goal?: Goal; limit: number; maxContexts?: number },
+): { report: ProgressionReport; listsCut: boolean } {
   const limit = Math.max(0, opts.limit);
   const goal = opts.goal;
   const notes: string[] = [];
@@ -400,10 +411,10 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
 
   // ---- results ----
   const firedPlans = new Set(plans.filter((_, pi) => fired[pi]));
-  let truncated = capped || contextOverflow;
+  let listsCut = false;
   const cap = <T>(list: T[]): T[] => {
     if (list.length <= limit) return list;
-    truncated = true;
+    listsCut = true;
     return list.slice(0, limit);
   };
   const reachable = (mapId: number): boolean => facts.has(fact.map(mapId));
@@ -584,8 +595,8 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
     truncated: false,
   };
   if (goalReport !== undefined) report.goal = goalReport;
-  report.truncated = truncated;
-  return report;
+  report.truncated = capped || contextOverflow || listsCut;
+  return { report, listsCut };
 }
 
 /** Most edges a graph draws. */
@@ -599,6 +610,8 @@ function graphLabel(id: number, name: string | undefined): string {
     .replace(/["'`[\](){}<>;%|\x5c#&]/g, " ")
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ")
+    // Bidirectional controls (LRM, RLM, embeddings/overrides, isolates) could reorder the text around the label.
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return Array.from(clean === "" ? String(id) : `${id}: ${clean}`).slice(0, MAX_LABEL).join("");

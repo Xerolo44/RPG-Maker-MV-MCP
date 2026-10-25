@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ProjectError, type Project } from "../project.js";
 import { buildProjectIndex, type ProjectIndex } from "../eventIndex.js";
-import { analyzeProgression, progressionGraph, type Goal, type ProgressionReport } from "../progression.js";
+import { analyzeProgressionDetailed, progressionGraph, type Goal, type ProgressionReport } from "../progression.js";
 import { safe, textResult } from "../util.js";
 
 const MAX_ID = 2147483647;
@@ -33,7 +33,7 @@ const DESCRIPTION = [
   "Returns reachableMaps, unreachableMaps, deadEndMaps (no exit), deadPages (pages that can never run, with the first unmet condition), " +
     "switches/variables read-but-never-set and set-but-never-read, edges (direct transfers), notes, a plain-language summary and names (map id to name).",
   "goal (exactly one of switch, mapId or event) adds a verdict with up to 10 blockedBy reasons. includeGraph adds a Mermaid flowchart of the map transfers. " +
-    "Lists are cut at limit (truncated says so; the summary counts stay exact). Staged changeset data is analysed.",
+    "Lists are cut at limit (the summary counts stay exact); truncated is also set when an analysis cap was hit (see notes). Staged changeset data is analysed.",
 ].join("\n");
 
 const CAVEAT =
@@ -48,8 +48,24 @@ function toGoal(goal: z.infer<typeof goalSchema>): Goal {
   return { event: goal.event as { mapId: number; eventId: number } };
 }
 
+/** True when the map file has an event with this id (whatever its pages), using the same id rule as the index. */
+async function mapHasEvent(project: Project, mapId: number, eventId: number): Promise<boolean> {
+  try {
+    const map = await project.readJson(project.mapFile(mapId));
+    const events = typeof map === "object" && map !== null ? (map as { events?: unknown }).events : undefined;
+    if (!Array.isArray(events)) return false;
+    return events.some((ev, i) => {
+      if (typeof ev !== "object" || ev === null) return false;
+      const id = (ev as { id?: unknown }).id;
+      return (typeof id === "number" && Number.isInteger(id) ? id : i) === eventId;
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** Rejects a goal that names a map or event the project does not have (an unreadable map is left to the analysis). */
-function checkGoal(index: ProjectIndex, goal: Goal): void {
+async function checkGoal(project: Project, index: ProjectIndex, goal: Goal): Promise<void> {
   const unlisted = (mapId: number): ProjectError =>
     new ProjectError(`map ${mapId} is not listed in MapInfos.json. Use list_maps to see the map ids.`);
   if ("mapId" in goal && !index.mapIds.includes(goal.mapId)) throw unlisted(goal.mapId);
@@ -58,6 +74,9 @@ function checkGoal(index: ProjectIndex, goal: Goal): void {
     if (!index.mapIds.includes(mapId)) throw unlisted(mapId);
     const exists = index.pages.some((p) => p.kind === "map" && p.mapId === mapId && p.eventId === eventId);
     if (!exists && !index.unreadableMaps.includes(mapId)) {
+      if (await mapHasEvent(project, mapId, eventId)) {
+        throw new ProjectError(`event ${eventId} on map ${mapId} has no pages, so it can never run. Use get_event to inspect it.`);
+      }
       throw new ProjectError(`event ${eventId} does not exist on map ${mapId}. Use search_map_events to find event ids.`);
     }
   }
@@ -80,7 +99,13 @@ function lowReasons(full: ProgressionReport, index: ProjectIndex): string[] {
 }
 
 /** The 3-6 plain-language lines. Counts come from `full` (the report without the limit) so they stay exact. */
-function summarize(report: ProgressionReport, full: ProgressionReport, index: ProjectIndex, limit: number): string[] {
+export function summarize(
+  report: ProgressionReport,
+  full: ProgressionReport,
+  index: ProjectIndex,
+  limit: number,
+  listsCut: boolean,
+): string[] {
   const lines: string[] = [];
   const reachable = full.reachableMaps.length;
   lines.push(
@@ -114,7 +139,9 @@ function summarize(report: ProgressionReport, full: ProgressionReport, index: Pr
         `${full.notes.length > 0 ? `; see notes for details` : ""}. 'Unreachable' and 'dead' results may be wrong.`,
     );
   }
-  if (report.truncated) lines.push(`The lists below are cut at limit ${limit}; the counts above are exact. Raise limit (up to 500) to see more.`);
+  // `truncated` is also set by an analysis cap, where no list is cut and raising the limit does not help.
+  if (listsCut) lines.push(`The lists below are cut at limit ${limit}; the counts above are exact. Raise limit (up to 500) to see more.`);
+  if (full.truncated) lines.push("Results were truncated by an analysis cap (see notes); counts may be approximate.");
   lines.push(CAVEAT);
   return lines;
 }
@@ -153,11 +180,11 @@ export function registerProgressionTool(server: McpServer, project: Project): vo
       void project.root; // throws the standard "No project selected" error first
       const index = await buildProjectIndex(project);
       const parsed = goal === undefined ? undefined : toGoal(goal);
-      if (parsed !== undefined) checkGoal(index, parsed);
+      if (parsed !== undefined) await checkGoal(project, index, parsed);
 
-      const report = analyzeProgression(index, { goal: parsed, limit });
-      // Lists are cut at `limit`; the summary counts the whole result.
-      const full = report.truncated ? analyzeProgression(index, { goal: parsed, limit: Number.MAX_SAFE_INTEGER }) : report;
+      const { report, listsCut } = analyzeProgressionDetailed(index, { goal: parsed, limit });
+      // Lists are cut at `limit`; the summary counts the whole result, so it needs a second run only when a list was cut.
+      const full = listsCut ? analyzeProgressionDetailed(index, { goal: parsed, limit: Number.MAX_SAFE_INTEGER }).report : report;
 
       const allNames = await readMapNames(project);
       const mentioned = new Set<number>([report.startMapId, ...report.reachableMaps, ...report.unreachableMaps, ...report.deadEndMaps]);
@@ -174,7 +201,7 @@ export function registerProgressionTool(server: McpServer, project: Project): vo
         if (name !== undefined) names[mapId] = name;
       }
 
-      const result: Record<string, unknown> = { summary: summarize(report, full, index, limit), ...report, names };
+      const result: Record<string, unknown> = { summary: summarize(report, full, index, limit, listsCut), ...report, names };
       if (includeGraph) result.graph = progressionGraph(report, allNames);
       return textResult(result);
     }),

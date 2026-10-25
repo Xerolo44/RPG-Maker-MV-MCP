@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { buildProjectIndex } from "../dist/eventIndex.js";
-import { analyzeProgression, progressionGraph } from "../dist/progression.js";
+import { analyzeProgression, analyzeProgressionDetailed, progressionGraph } from "../dist/progression.js";
+import { summarize } from "../dist/tools/progressionTools.js";
 import { mulberry32 } from "../dist/battle.js";
 import { c, END, createFixtureProject, event, page } from "./helpers/fixtureProject.mjs";
 
@@ -1132,4 +1133,72 @@ test("analyze_progression: the description explains the model", async () => {
     for (const word of ["over-approximation", "plugin", "notetag", "confidence", "unreachable"]) assert.ok(tool.description.includes(word), word);
     assert.ok(tool.inputSchema.properties.goal);
   }, { setProject: false });
+});
+
+// ---- release 0.5.0 review fixes ----
+
+/** A switch-gated-free chain of n maps, so the 10 000-round cap is hit without any list being long. */
+function longChain(n) {
+  const maps = {};
+  for (let id = 1; id <= n; id++) maps[id] = { events: [null, ...(id < n ? [door(1, id + 1)] : [])] };
+  return maps;
+}
+
+test("listsCut is true only when a list was really cut at limit, not when an analysis cap was hit", async () => {
+  const index = await buildProjectIndex(memoryProject({ maps: longChain(10_005) }));
+  // The round cap is hit: truncated, but with a huge limit no list is cut.
+  const capped = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER });
+  assert.equal(capped.report.truncated, true);
+  assert.equal(capped.listsCut, false);
+  // With a small limit the lists are cut as well.
+  const both = analyzeProgressionDetailed(index, { limit: 3 });
+  assert.equal(both.report.truncated, true);
+  assert.equal(both.listsCut, true);
+  // Nothing capped, nothing cut.
+  const small = await buildProjectIndex(memoryProject({ maps: longChain(3) }));
+  assert.deepEqual(analyzeProgressionDetailed(small, { limit: 10 }).report.truncated, false);
+  assert.equal(analyzeProgressionDetailed(small, { limit: 10 }).listsCut, false);
+  assert.equal(analyzeProgressionDetailed(small, { limit: 1 }).listsCut, true);
+});
+
+test("summary: an analysis cap says so and does not claim a list was cut at limit", async () => {
+  const index = await buildProjectIndex(memoryProject({ maps: longChain(10_005) }));
+  const { report, listsCut } = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER });
+  assert.equal(listsCut, false);
+  const lines = summarize(report, report, index, 500, listsCut);
+  assert.ok(lines.includes("Results were truncated by an analysis cap (see notes); counts may be approximate."), lines.join("\n"));
+  assert.ok(!lines.some((l) => /cut at limit/.test(l)), lines.join("\n"));
+});
+
+test("summary: a list cut at limit says so and does not blame an analysis cap", async () => {
+  const maps = { 1: { events: [null, door(1, 2)] }, 2: {}, 3: {}, 4: {}, 5: {} };
+  const index = await buildProjectIndex(memoryProject({ maps }));
+  const { report, listsCut } = analyzeProgressionDetailed(index, { limit: 1 });
+  assert.equal(listsCut, true);
+  const full = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER }).report;
+  const lines = summarize(report, full, index, 1, listsCut);
+  assert.ok(lines.some((l) => l.includes("The lists below are cut at limit 1")), lines.join("\n"));
+  assert.ok(!lines.some((l) => /analysis cap/.test(l)), lines.join("\n"));
+});
+
+test("progressionGraph: bidirectional control characters in map names are stripped from labels", () => {
+  const bidi = "A\u200eB\u200fC\u202aD\u202bE\u202cF\u202dG\u202eH\u2066I\u2067J\u2068K\u2069L";
+  const graph = progressionGraph(baseReport(), new Map([[1, bidi]]));
+  assert.ok(!/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(graph), JSON.stringify(graph));
+  assert.ok(graph.includes('m1["1: A B C D E F G H I J K L"]'), graph);
+});
+
+test("analyze_progression: an event goal on an event with no pages says so, a missing event does not exist", async () => {
+  const spec = { maps: { 1: { events: [null, event(1, []), npc(2, [])] }, 2: {} } };
+  await withServer(spec, async ({ call }) => {
+    const empty = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 1 } } });
+    assert.equal(empty.isError, true);
+    assert.match(empty.text, /event 1 on map 1 has no pages/);
+    assert.doesNotMatch(empty.text, /does not exist/);
+    const missing = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 9 } } });
+    assert.equal(missing.isError, true);
+    assert.match(missing.text, /event 9 does not exist on map 1/);
+    const ok = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 2 } } });
+    assert.equal(ok.isError, false, ok.text);
+  });
 });
