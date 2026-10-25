@@ -1,6 +1,6 @@
 // Pure interpreter for a subset of RPG Maker MV event commands. It never touches the project:
 // callers supply the command list, a starting state and a common-event lookup, and get a trace back.
-import type { Cmd } from "./commandList.js";
+import { battleHasBranches, type Cmd } from "./commandList.js";
 import { mulberry32 } from "./battle.js";
 
 export interface SimState {
@@ -324,6 +324,12 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           break;
         }
         case 301: {
+          if (!battleHasBranches(cmds, index)) {
+            // No branches (the editor writes none without Can Escape / Continue when Loss): the commands after it run.
+            if (battleResult === "escape" && !p[2]) change("battle: cannot escape (canEscape is false)");
+            if (battleResult === "lose" && !p[3]) change("battle: cannot lose (canLose is false)");
+            break;
+          }
           const end = findForward(cmds, index, c.indent, [604]);
           const stop = end === -1 ? cmds.length : end;
           const wanted = BATTLE_BRANCH[battleResult];

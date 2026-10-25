@@ -327,8 +327,10 @@ compiles these nodes into correctly indented commands:
   list of steps (`up`, `turnLeft`, `{wait: 10}`, `{jump: {x, y}}`, `{switchOn: 5}`, `{speed: 4}`,
   ...); a repeating route (`repeat: true`) never finishes, so it cannot be waited for and an
   explicit `wait: true` is rejected.
-- **Game flow:** `battle` (with optional `onWin`, `onEscape` and `onLose` branches; a branch the
-  engine could not reach is rejected), `shop`, `callCommon`, `label` / `jump`, `exit`, `comment`,
+- **Game flow:** `battle` (`onWin`, `onEscape` and `onLose` bodies; like the editor, the branches
+  and their closer are written only when `canEscape` or `canLose` is on, or `onWin` has nodes, and
+  with neither the battle is a single command followed by whatever comes next; a body for a branch
+  whose box is off is rejected), `shop`, `callCommon`, `label` / `jump`, `exit`, `comment`,
   `gold`, `item` (items, weapons and armors), `party`, `learnSkill`, `recoverAll`, `nameInput`,
   `plugin` (a plugin command line) and `scene` (menu, save, game over, title).
 

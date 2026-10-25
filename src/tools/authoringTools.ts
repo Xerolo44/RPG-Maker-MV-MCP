@@ -46,7 +46,7 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
         "A repeating route never finishes, so with repeat: true wait defaults to false and an explicit wait: true is rejected. " +
         'Example: [{"fade":"out"},{"playAudio":{"kind":"bgm","name":"Theme1"}},{"moveRoute":{"target":"player","steps":["up","up",{"wait":10},"turnLeft"]}},{"fade":"in"}]. ' +
         "(3) GAME FLOW: " +
-        '{battle: {troopId, canEscape?: false, canLose?: false, onWin?: Node[], onEscape?: Node[] (needs canEscape: true), onLose?: Node[] (needs canLose: true)}} (branches are optional; an unreachable branch is rejected) | ' +
+        '{battle: {troopId, canEscape?: false, canLose?: false, onWin?: Node[], onEscape?: Node[] (needs canEscape: true), onLose?: Node[] (needs canLose: true)}} (like the editor, branches are written only when canEscape or canLose is true or onWin has nodes: then 601, plus 602 with canEscape and 603 with canLose even when empty, and the closer 604; with neither, just the battle command is written and what follows runs after the battle; a body for a branch whose box is off is rejected) | ' +
         '{shop: {goods: [{type: "item"|"weapon"|"armor", id, price?}] (1-40; omit price for the database price), purchaseOnly?: false}} | ' +
         "{callCommon: commonEventId} | {label: name} | {jump: label name} (jump to a label in the same list) | {exit: true} (stop this event) | {comment: string | string[]} (not shown in game) | " +
         "{gold: n} (positive gives, negative takes; not 0) | " +

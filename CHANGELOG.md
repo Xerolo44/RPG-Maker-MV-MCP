@@ -26,9 +26,12 @@ All notable changes to this project are documented here. The format follows
   - 15 game-flow nodes: `battle` (with optional win / escape / lose branches), `shop`,
     `callCommon`, `label`, `jump`, `exit`, `comment`, `gold`, `item`, `party`, `learnSkill`,
     `recoverAll`, `nameInput`, `plugin`, `scene`.
-  - Block support for Battle Processing (301, 601-604) in the command-list checks used by
-    `build_dialogue_tree` and `lint_events`, and in the insertion checks of `build_dialogue_tree`
-    (an `index` inside a battle body or on a move-route row is refused).
+  - Block support for Battle Processing with branches (301 followed by 601-603 and closed by 604) in
+    the command-list checks used by `build_dialogue_tree` and `lint_events`, and in the insertion
+    checks of `build_dialogue_tree` (an `index` inside a battle branch or on a move-route row is
+    refused). Like the editor, a 301 with no branch right after it (neither Can Escape nor Continue
+    when Loss) is a single command, not a block, and `build_dialogue_tree` writes a `battle` node
+    without `canEscape`, `canLose` or an `onWin` body as that lone 301.
 - `simulate_event` understands the new commands: presentation commands (fades, tint, flash,
   shake, weather, waits, audio, pictures, animations, balloons, move routes) are skipped and
   counted in the new `cosmetic` field instead of being listed as unsupported; the new

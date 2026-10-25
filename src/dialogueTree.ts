@@ -623,13 +623,26 @@ function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number
         throw new Error(`Invalid battle node: ${detail}`);
       }
       const b = n.battle;
-      out.push(cmd(301, indent, 0, b.troopId, b.canEscape ?? false, b.canLose ?? false));
-      for (const [code, body] of [[601, b.onWin], [602, b.onEscape], [603, b.onLose]] as const) {
-        if (body === undefined || body.length === 0) continue;
-        out.push(cmd(code, indent));
-        compileNodes(body, indent + 1, depth + 1, out);
+      const canEscape = b.canEscape === true;
+      const canLose = b.canLose === true;
+      out.push(cmd(301, indent, 0, b.troopId, canEscape, canLose));
+      // The editor writes branches only when "Can Escape" or "Continue when Loss" is on (If Win, plus If Escape /
+      // If Lose for the boxes that are checked, each even when empty) and closes them with 604. A battle with
+      // neither box and no win body is the lone 301, so the commands after it simply run after the battle.
+      const winBody = b.onWin ?? [];
+      if (canEscape || canLose || winBody.length > 0) {
+        out.push(cmd(601, indent));
+        compileNodes(winBody, indent + 1, depth + 1, out);
+        if (canEscape) {
+          out.push(cmd(602, indent));
+          compileNodes(b.onEscape ?? [], indent + 1, depth + 1, out);
+        }
+        if (canLose) {
+          out.push(cmd(603, indent));
+          compileNodes(b.onLose ?? [], indent + 1, depth + 1, out);
+        }
+        out.push(cmd(604, indent));
       }
-      out.push(cmd(604, indent));
     } else {
       out.push(...leafCommands(n, indent));
     }

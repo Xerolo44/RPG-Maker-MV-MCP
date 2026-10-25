@@ -694,9 +694,39 @@ test("a battle without the chosen branch is skipped with a note in changes", () 
   t = sim(onlyWin, { battleResult: "escape" });
   assert.deepEqual(t.changes, ["battle: cannot escape (canEscape is false)", "battle: no escape branch"]);
   const bare = sim(battleList([{ battle: { troopId: 1 } }, { say: "after" }]));
-  assert.deepEqual(bare.changes, ["battle: no win branch"]);
+  assert.deepEqual(bare.changes, []);
   assert.deepEqual(bare.messages, ["after"]);
   assert.deepEqual(bare.unsupported, []);
+});
+
+test("a branchless battle (editor style: no 601-604) does not skip the commands after it", () => {
+  const list = [c(301, 0, 0, 1, false, false), c(121, 0, 7, 7, 0), c(401, 0, "later"), END];
+  for (const result of ["win", undefined]) {
+    const t = sim(list, { battleResult: result });
+    assert.equal(t.finalState.switches[7], true);
+    assert.deepEqual(t.changes, ["switch 7 → ON"]);
+    assert.equal(t.ended, "end");
+  }
+  assert.deepEqual(sim(list, { battleResult: "escape" }).changes, ["battle: cannot escape (canEscape is false)", "switch 7 → ON"]);
+  assert.deepEqual(sim(list, { battleResult: "lose" }).changes, ["battle: cannot lose (canLose is false)", "switch 7 → ON"]);
+});
+
+test("a branchless battle followed later by a battle with branches never jumps into the second one's 601", () => {
+  const list = [
+    c(301, 0, 0, 1, false, false),
+    c(121, 0, 1, 1, 0),
+    c(301, 0, 0, 2, true, true),
+    c(601, 0), c(121, 1, 2, 2, 0),
+    c(602, 0), c(121, 1, 3, 3, 0),
+    c(603, 0), c(121, 1, 4, 4, 0),
+    c(604, 0),
+    c(121, 0, 5, 5, 0),
+    END,
+  ];
+  const win = sim(list, { battleResult: "win" });
+  assert.deepEqual(Object.keys(win.finalState.switches).sort(), ["1", "2", "5"]);
+  const lose = sim(list, { battleResult: "lose" });
+  assert.deepEqual(Object.keys(lose.finalState.switches).sort(), ["1", "4", "5"]);
 });
 
 test("a battle branch can contain choices and an exit; nesting indents are respected", () => {

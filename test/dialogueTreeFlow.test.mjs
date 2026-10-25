@@ -176,13 +176,35 @@ test("battle with only onWin; branch order is always win, escape, lose", () => {
     cmd(604, 0),
   ]);
   const list = compiled({ battle: { troopId: 1, canEscape: true, canLose: true, onLose: [{ exit: true }], onEscape: [{ wait: 5 }] } });
-  assert.deepEqual(shape(list), [[301, 0], [602, 0], [230, 1], [603, 0], [115, 1], [604, 0]]);
+  assert.deepEqual(shape(list), [[301, 0], [601, 0], [602, 0], [230, 1], [603, 0], [115, 1], [604, 0]]);
 });
 
-test("battle without branches is 301 then 604; empty branch arrays emit nothing", () => {
-  assert.deepEqual(compiled({ battle: { troopId: 5 } }), [cmd(301, 0, 0, 5, false, false), cmd(604, 0)]);
-  assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: true, canLose: true } }), [cmd(301, 0, 0, 5, true, true), cmd(604, 0)]);
-  assert.deepEqual(compiled({ battle: { troopId: 5, onWin: [] } }), [cmd(301, 0, 0, 5, false, false), cmd(604, 0)]);
+test("battle without flags or bodies is just the 301, like the editor writes it", () => {
+  assert.deepEqual(compiled({ battle: { troopId: 5 } }), [cmd(301, 0, 0, 5, false, false)]);
+  assert.deepEqual(compiled({ battle: { troopId: 5, onWin: [] } }), [cmd(301, 0, 0, 5, false, false)]);
+  assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: false, canLose: false } }), [cmd(301, 0, 0, 5, false, false)]);
+});
+
+test("battle with a flag on writes the branches of the checked boxes even when empty, then 604", () => {
+  assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: true, canLose: true } }), [
+    cmd(301, 0, 0, 5, true, true), cmd(601, 0), cmd(602, 0), cmd(603, 0), cmd(604, 0),
+  ]);
+  assert.deepEqual(compiled({ battle: { troopId: 5, canEscape: true } }), [
+    cmd(301, 0, 0, 5, true, false), cmd(601, 0), cmd(602, 0), cmd(604, 0),
+  ]);
+  assert.deepEqual(compiled({ battle: { troopId: 5, canLose: true, onLose: [{ exit: true }] } }), [
+    cmd(301, 0, 0, 5, false, true), cmd(601, 0), cmd(603, 0), cmd(115, 1), cmd(604, 0),
+  ]);
+});
+
+test("a branchless battle followed by commands, and a later battle with branches, stay separate blocks", () => {
+  const list = valid([{ battle: { troopId: 1 } }, { gold: 5 }, { battle: { troopId: 2, canLose: true, onLose: [{ exit: true }] } }]);
+  assert.deepEqual(shape(list), [[301, 0], [125, 0], [301, 0], [601, 0], [603, 0], [115, 1], [604, 0]]);
+});
+
+test("a branch body for a box that is off is rejected with a clear message", () => {
+  rejected({ battle: { troopId: 1, canLose: true, onEscape: [{ say: "x" }] } }, /onEscape needs canEscape: true/);
+  rejected({ battle: { troopId: 1, canEscape: true, onLose: [{ say: "x" }] } }, /onLose needs canLose: true/);
 });
 
 test("a battle branch containing choices containing an if has exact indents 1/2/3", () => {
@@ -461,4 +483,11 @@ test("the build_dialogue_tree description lists every node, the move-route vocab
     assert.match(index, /505/);
     assert.match(index, /601/);
   });
+});
+
+test("raw editor-style Battle Processing (a lone 301, and a 301 with branches) is accepted and stays structurally valid", () => {
+  const lone = { raw: [{ code: 301, parameters: [0, 3, false, false] }, { code: 121, parameters: [5, 5, 0] }] };
+  accepted(lone);
+  const list = valid([lone, { raw: [{ code: 301, parameters: [0, 4, true, false] }, { code: 601 }, { code: 602 }, { code: 604 }] }]);
+  assert.deepEqual(list.map((c) => c.code), [301, 121, 301, 601, 602, 604]);
 });

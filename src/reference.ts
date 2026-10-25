@@ -60,7 +60,7 @@ AUDIO / PICTURES
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
-301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — a block like 102/111: optional branches 601 If Win, 602 If Escape (only reachable with canEscape), 603 If Lose (only reachable with canLose), each followed by its body one indent deeper, closed by 604 End of Battle
+301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — the editor writes branches only when Can Escape or Continue when Loss is on: then 601 If Win, 602 If Escape (with canEscape), 603 If Lose (with canLose), each followed by its body one indent deeper, closed by 604 End of Battle; with both off it is the lone 301 and the commands after it simply run
 302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
 285 Get Location Info: [variableId, infoType(0 terrain tag,1 event id,2-5 tile id of layer 1-4,6 region id), designation(0 direct,1 vars), x, y] — stores the result in the variable; with designation 1 x and y are variable ids

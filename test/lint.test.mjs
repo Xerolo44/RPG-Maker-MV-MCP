@@ -414,6 +414,10 @@ test("a compiled battle block with all branches, nesting and an exit lints clean
   assert.deepEqual(lint(list), []);
 });
 
+test("a branchless Battle Processing (editor style, no 601-604) followed by commands lints clean", () => {
+  assert.deepEqual(only([c(301, 0, 0, 1, false, false), c(121, 0, 5, 5, 0), c(301, 0, 0, 2, true, false), c(601, 0), c(602, 0), c(604, 0), END], "block-structure"), []);
+});
+
 test("block-structure: a hand-built Battle Processing without its End of Battle is an error at the opener", () => {
   const f = only([c(301, 0, 0, 1, true, true), c(601, 0), c(401, 1, "won"), c(0, 1), END], "block-structure");
   assert.equal(f.length, 1);

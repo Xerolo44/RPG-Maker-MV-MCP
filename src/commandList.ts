@@ -43,6 +43,16 @@ interface Open {
   index: number;
 }
 
+/**
+ * True when the Battle Processing (301) at `index` has branches: the editor writes 601/602/603 (and the closer 604)
+ * only when "Can Escape" or "Continue when Loss" is on, so a 301 whose next command is not a branch at the same
+ * indent is a single command with no block.
+ */
+export function battleHasBranches(list: readonly Cmd[], index: number): boolean {
+  const next = list[index + 1];
+  return list[index]?.code === 301 && next !== undefined && next.indent === list[index].indent && (next.code === 601 || next.code === 602 || next.code === 603);
+}
+
 /** Human-readable problems with a command list; `[]` when it is valid. */
 export function validateCommandList(list: Cmd[]): string[] {
   const problems: string[] = [];
@@ -66,6 +76,7 @@ export function validateCommandList(list: Cmd[]): string[] {
       problems.push(`index ${i} (code ${c.code}): indent jumps from ${list[i - 1].indent} to ${c.indent}`);
     }
     if (BLOCKS[c.code]) {
+      if (c.code === 301 && !battleHasBranches(list, i)) return; // branchless battle: a single command
       stack.push({ code: c.code, indent: c.indent, index: i });
       return;
     }
