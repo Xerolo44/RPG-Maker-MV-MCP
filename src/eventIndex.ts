@@ -1,10 +1,11 @@
 // Shared, pure project index for the analysis tools (find_usages, analyze_progression).
 // It flattens a project into event pages plus typed references (reads, writes, uses) taken from page
 // conditions, event commands, selected database fields and System.json. Nothing here guesses: whatever
-// cannot be resolved statically (script and plugin commands, variable-designated transfers and battles)
-// is only counted in `hidden`. Page numbers (`page`) are 0-based indexes into the pages array, like lint.
+// cannot be resolved statically (script and plugin commands, variable-designated transfers and battles,
+// enabled plugins in js/plugins.js) is only counted in `hidden`. Page numbers (`page`) are 0-based indexes into the pages array, like lint.
 import type { Cmd } from "./commandList.js";
 import type { Project } from "./project.js";
+import { enabledPluginNames } from "./tools/pluginTools.js";
 
 export type RefKind =
   | "switch"
@@ -82,6 +83,11 @@ export interface EventPage {
   /** Map page trigger, or the common event's own trigger (0 none, 1 autorun, 2 parallel). */
   trigger?: number;
   name?: string;
+  /**
+   * Map pages with an autonomous custom move route (`moveType` 3): the route's commands (at most the first
+   * MAX_ROUTE_ENTRIES). The route runs whenever the page is the active one; absent for every other page.
+   */
+  moveRoute?: Record<string, unknown>[];
 }
 
 export interface ProjectIndex {
@@ -101,6 +107,13 @@ export interface ProjectIndex {
     variableBattles: number;
     /** 121/122 commands whose id range was longer than 1000 and therefore only partly indexed. */
     truncatedRanges: number;
+    /**
+     * Enabled plugins in js/plugins.js except the MV default "Community_Basic": they can act through parameters
+     * and notetags without any plugin command.
+     */
+    enabledPlugins: number;
+    /** The first 10 of them, in file order. */
+    enabledPluginNames: string[];
   };
 }
 
@@ -146,7 +159,11 @@ function textVariableRefs(texts: unknown[]): Ref[] {
 
 /** The first MAX_ROUTE_ENTRIES route commands of a 205 (empty when the route is malformed). */
 function routeEntries(p: unknown[]): Record<string, unknown>[] {
-  const route = p[1];
+  return routeCommands(p[1]);
+}
+
+/** The first MAX_ROUTE_ENTRIES commands of a move route object `{ list, ... }` (empty when it is malformed). */
+export function routeCommands(route: unknown): Record<string, unknown>[] {
   if (typeof route !== "object" || route === null) return [];
   const list = (route as Record<string, unknown>).list;
   if (!Array.isArray(list)) return [];
@@ -423,8 +440,19 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
     unreadableMaps: [],
     startMapId: isInt(sys.startMapId) ? sys.startMapId : 0,
     partyMembers: asArray(sys.partyMembers).filter(isId),
-    hidden: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0 },
+    hidden: {
+      scriptCommands: 0,
+      pluginCommands: 0,
+      variableTransfers: 0,
+      variableBattles: 0,
+      truncatedRanges: 0,
+      enabledPlugins: 0,
+      enabledPluginNames: [],
+    },
   };
+  const plugins = (await enabledPluginNames(project)).filter((name) => name !== "Community_Basic");
+  index.hidden.enabledPlugins = plugins.length;
+  index.hidden.enabledPluginNames = plugins.slice(0, 10);
   const { refs, pages, hidden } = index;
 
   const addRefs = (list: Ref[], where: Where): void => {
@@ -490,7 +518,16 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
         if (isObj(raw.conditions)) pg.conditions = raw.conditions as PageConditions;
         if (typeof raw.trigger === "number") pg.trigger = raw.trigger;
         if (typeof ev.name === "string") pg.name = ev.name;
+        const route = raw.moveType === 3 ? routeCommands(raw.moveRoute) : [];
+        if (route.length > 0) pg.moveRoute = route;
         addPage(pg, { source: "map", mapId, eventId, page: pageIndex });
+        // Autonomous move route: switch ON (27) / OFF (28) are writes, a script (45) is hidden.
+        const routeWhere: Where = { source: "map", mapId, eventId, page: pageIndex, field: "moveRoute" };
+        for (const entry of route) {
+          const ep = entry.parameters;
+          if ((entry.code === 27 || entry.code === 28) && Array.isArray(ep) && isId(ep[0])) refs.push({ kind: "switch", id: ep[0], role: "write", where: routeWhere });
+          else if (entry.code === 45) hidden.scriptCommands++;
+        }
       });
     });
   }

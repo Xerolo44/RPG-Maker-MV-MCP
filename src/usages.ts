@@ -44,6 +44,7 @@ export function describeWhere(w: Where): string {
     case "map": {
       const map = w.mapId === undefined ? "Map" : `Map${pad3(w.mapId)}`;
       if (w.eventId === undefined) return w.field === undefined ? map : `${map} ${w.field}`;
+      if (w.field === "moveRoute") return `${map} event ${w.eventId}${w.page === undefined ? "" : ` page ${w.page + 1}`} autonomous move route`;
       return `${map} event ${w.eventId}${pageAndCommand(w)}`;
     }
     case "commonEvent":
@@ -109,9 +110,13 @@ export function findUsages(
 
   const { scriptCommands, pluginCommands, variableTransfers, truncatedRanges } = index.hidden;
   const scriptPlugin = scriptCommands + pluginCommands;
-  // A script or plugin command could do what the index cannot see, and a truncated range hides ids: say so.
+  // Hand-built indexes (tests, older callers) may lack the plugin counter.
+  const plugins = index.hidden.enabledPlugins ?? 0;
+  const pluginPart = plugins > 0 ? [`${plugins} enabled plugins`] : [];
+  // A script or plugin command or an enabled plugin could do what the index cannot see, and a truncated range hides ids: say so.
   let doubt = "";
-  if (scriptPlugin > 0) doubt += ` — note: ${scriptPlugin} script/plugin commands in this project could also set or read it.`;
+  const unseen = [...(scriptPlugin > 0 ? [`${scriptPlugin} script/plugin commands`] : []), ...pluginPart];
+  if (unseen.length > 0) doubt += ` — note: ${unseen.join(" and ")} in this project could also set or read it.`;
   if ((target.kind === "switch" || target.kind === "variable") && truncatedRanges > 0) {
     doubt += ` — note: ${truncatedRanges} range commands longer than 1000 ids were truncated.`;
   }
@@ -128,10 +133,8 @@ export function findUsages(
     if (!runsByItself) warnings.push(`${label} ${target.id} is never called${doubt}`);
   } else if (target.kind === "map" && uses.length === 0) {
     const transferring = scriptPlugin + variableTransfers;
-    const note =
-      transferring > 0
-        ? ` — note: ${transferring} script, plugin or variable-designated transfer commands in this project could also send the player here.`
-        : "";
+    const movers = [...(transferring > 0 ? [`${transferring} script, plugin or variable-designated transfer commands`] : []), ...pluginPart];
+    const note = movers.length > 0 ? ` — note: ${movers.join(" and ")} in this project could also send the player here.` : "";
     warnings.push(`no event transfers the player here and it is not the start map${note}`);
   }
 

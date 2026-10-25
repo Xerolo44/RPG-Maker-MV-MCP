@@ -4,7 +4,8 @@
 // when it runs ALL of its commands take effect (conditions inside the list — 111 branches, choices — are ignored,
 // and nothing is ever undone: OFF switches, lost items and removed actors are not tracked). Facts only ever become
 // true, so a claim "this map can never be reached" / "this page can never run" is sound under the model. Scripts,
-// plugin commands and variable-designated transfers or battles are outside the model; they only lower `confidence`.
+// plugin commands, enabled plugins and variable-designated transfers or battles are outside the model; they only
+// lower `confidence`. A page's autonomous move route (moveType 3) counts as part of the page.
 //
 // The fixpoint is event-driven: each page waits on the facts its conditions need and runs once when they all hold,
 // so the work is linear in pages + commands. Facts are strings:
@@ -16,7 +17,7 @@
 // event and their 123 does nothing. Item effects (code 44) call their common event once the item is obtainable;
 // skill effects always may (any actor might learn the skill).
 import type { Cmd } from "./commandList.js";
-import { commandRefs, type EventPage, type ProjectIndex } from "./eventIndex.js";
+import { commandRefs, routeCommands, type EventPage, type ProjectIndex } from "./eventIndex.js";
 
 export type Goal = { switch: number } | { mapId: number } | { event: { mapId: number; eventId: number } };
 
@@ -52,6 +53,8 @@ export interface ProgressionReport {
 
 /** Most fixpoint rounds (one round = every fact found in the previous round has been propagated). */
 const MAX_ROUNDS = 10_000;
+/** Most common-event call contexts (common event x calling map event) tracked; see analyzeProgression. */
+export const MAX_CONTEXTS = 100_000;
 /** Most `goal.blockedBy` entries. */
 const MAX_BLOCKERS = 10;
 
@@ -205,18 +208,30 @@ function planEffects(plan: Plan, switches: Set<number>, variables: Set<number>):
       case 301:
         if (p[0] === 0 && isId(p[1])) plan.effects.push(fact.troop(p[1]));
         break;
+      case 205: // [character, route]
+        routeSwitchesOn(routeCommands(p[1]), plan);
+        break;
       default:
-        // 205 move-route switch writes (ON and OFF both count: over-approximation) and other variable writes (103, 104, 285).
-        for (const r of commandRefs(cmd)) {
-          if (r.role === "write" && (r.kind === "switch" || r.kind === "variable")) plan.effects.push(fact[r.kind](r.id));
-        }
+        // other variable writes (103, 104, 285)
+        for (const r of commandRefs(cmd)) if (r.role === "write" && r.kind === "variable") plan.effects.push(fact.variable(r.id));
     }
+  }
+  // An autonomous move route (moveType 3) runs while the page is active, like its commands.
+  if (plan.page.moveRoute !== undefined) routeSwitchesOn(plan.page.moveRoute, plan);
+}
+
+/** Route code 27 is "Switch ON" (28, switch OFF, never adds anything). */
+function routeSwitchesOn(route: Record<string, unknown>[], plan: Plan): void {
+  for (const entry of route) {
+    const ep = entry.parameters;
+    if (entry.code === 27 && Array.isArray(ep) && isId(ep[0])) plan.effects.push(fact.switch(ep[0]));
   }
 }
 
 const byNumber = (a: number, b: number): number => a - b;
 
-export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; limit: number }): ProgressionReport {
+/** `maxContexts` overrides MAX_CONTEXTS (tests use a small value). */
+export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; limit: number; maxContexts?: number }): ProgressionReport {
   const limit = Math.max(0, opts.limit);
   const goal = opts.goal;
   const notes: string[] = [];
@@ -292,9 +307,27 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
       queue.push(f);
     }
   };
+  // Call contexts are capped. Past the cap none are created; instead every map event that has a page calling a
+  // common event gets every self switch any common event can turn ON — coarser, but still never too small, since
+  // every call chain starts at such a page.
+  const maxContexts = opts.maxContexts ?? MAX_CONTEXTS;
   const contexts = new Map<string, { ce: number; mapId: number; eventId: number }>();
+  let contextOverflow = false;
+  const callerPages: EventPage[] = [];
+  const ceChannels = [...new Set(plans.filter((p) => p.page.kind === "commonEvent").flatMap((p) => p.selfOn))];
+  const coarseSelf = (pg: EventPage): void => {
+    for (const ch of ceChannels) add(fact.self(pg.mapId ?? 0, pg.eventId, ch));
+  };
   const addContext = (ce: number, mapId: number, eventId: number): void => {
     const key = fact.context(ce, mapId, eventId);
+    if (facts.has(key)) return;
+    if (contexts.size >= maxContexts) {
+      if (!contextOverflow) {
+        contextOverflow = true;
+        for (const pg of callerPages) coarseSelf(pg);
+      }
+      return;
+    }
     contexts.set(key, { ce, mapId, eventId });
     add(key);
   };
@@ -309,6 +342,10 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
     for (const to of plan.transfers) {
       add(fact.map(to));
       if (pg.kind === "map" && pg.mapId !== undefined) edges.set(`${pg.mapId}>${to}`, { from: pg.mapId, to });
+    }
+    if (pg.kind === "map" && plan.calls.length > 0) {
+      callerPages.push(pg);
+      if (contextOverflow) coarseSelf(pg);
     }
     for (const ce of plan.calls) {
       add(fact.called(ce));
@@ -363,7 +400,7 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
 
   // ---- results ----
   const firedPlans = new Set(plans.filter((_, pi) => fired[pi]));
-  let truncated = capped;
+  let truncated = capped || contextOverflow;
   const cap = <T>(list: T[]): T[] => {
     if (list.length <= limit) return list;
     truncated = true;
@@ -459,7 +496,25 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
     notes.push(`reachable maps that could not be read: ${unreadable.map((m) => `map ${m}`).join(", ")} (what their events do is unknown)`);
   }
   const unlisted = [...new Set([...firedPlans].flatMap((p) => p.transfers))].filter((m) => !listed.has(m)).sort(byNumber);
-  if (unlisted.length > 0) notes.push(`transfer targets not listed in MapInfos.json: ${unlisted.map((m) => `map ${m}`).join(", ")}`);
+  if (unlisted.length > 0) {
+    low = true;
+    notes.push(
+      `transfer targets not listed in MapInfos.json: ${unlisted.map((m) => `map ${m}`).join(", ")} (a map file may still exist with events that were never indexed, so claims that depend on these maps may be wrong)`,
+    );
+  }
+  const { enabledPlugins, enabledPluginNames } = index.hidden;
+  if (enabledPlugins > 0) {
+    low = true;
+    notes.push(
+      `${enabledPlugins} enabled plugin(s) (${enabledPluginNames.join(", ")}${enabledPlugins > enabledPluginNames.length ? ", …" : ""}) can call common events, set switches or move the player through parameters or notetags that this analysis cannot see.`,
+    );
+  }
+  if (contextOverflow) {
+    low = true;
+    notes.push(
+      `more than ${maxContexts} common-event call contexts; past that, self switches set inside called common events are approximated coarsely (any map event that calls a common event may get them), so the results are less precise`,
+    );
+  }
   if (truncatedRanges > 0) {
     notes.push(`${truncatedRanges} switch/variable range commands are longer than 1000 ids; neverSet/neverRead only count their first 1000 ids`);
   }

@@ -40,6 +40,20 @@ export async function readPluginList(project: Project): Promise<PluginEntry[]> {
   }
 }
 
+/** Names of the enabled plugins in js/plugins.js, in file order. Never throws: a missing or unparseable file gives []. */
+export async function enabledPluginNames(project: Project): Promise<string[]> {
+  let list: unknown;
+  try {
+    list = await readPluginList(project);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((p): p is PluginEntry => typeof p === "object" && p !== null && (p as PluginEntry).status === true && typeof (p as PluginEntry).name === "string")
+    .map((p) => p.name);
+}
+
 async function writePluginList(project: Project, plugins: PluginEntry[]): Promise<void> {
   const lines = plugins.map((p) => JSON.stringify(p));
   const text =

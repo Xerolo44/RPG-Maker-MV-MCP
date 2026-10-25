@@ -516,7 +516,16 @@ function randomSpec(rng, heavy) {
   for (let m = 1; m <= nMaps; m++) {
     const events = [null];
     for (let e = 1, n = int(0, 4); e <= n; e++) {
-      events.push(event(e, Array.from({ length: int(1, 3) }, () => page([...Array.from({ length: int(0, 3) }, mapCommand), END], { conditions: conditions() }))));
+      const pageSpec = () => {
+        const extra = { conditions: conditions() };
+        if (chance(0.15)) {
+          // an autonomous move route (moveType 3) or a custom route that is not autonomous (moveType 0)
+          extra.moveType = chance(0.7) ? 3 : 0;
+          extra.moveRoute = { list: [{ code: chance(0.6) ? 27 : 28, parameters: [int(1, 8)] }, { code: 0, parameters: [] }], repeat: true, skippable: false, wait: false };
+        }
+        return page([...Array.from({ length: int(0, 3) }, mapCommand), END], extra);
+      };
+      events.push(event(e, Array.from({ length: int(1, 3) }, pageSpec)));
     }
     const encounterList = nTroops > 0 && chance(0.3) ? [{ troopId: int(1, nTroops), regionSet: [], weight: 5 }] : [];
     maps[m] = { events, encounterList };
@@ -616,7 +625,7 @@ function explore(spec, rng) {
           st.T.add(q[1]);
           break;
         case 205:
-          for (const r of q[1].list) if (r.code === 27 || r.code === 28) st.S.add(r.parameters[0]);
+          for (const r of q[1].list) if (r.code === 27) st.S.add(r.parameters[0]);
           break;
       }
     }
@@ -632,6 +641,8 @@ function explore(spec, rng) {
       fired.add(p);
       const ctx = p.kind === "map" ? `${p.mapId}:${p.eventId}` : null;
       runList(p.raw.list, ctx, p.kind === "map", p.mapId, new Set());
+      // an autonomous move route runs while its page is active
+      if (p.kind === "map" && p.raw.moveType === 3) for (const r of p.raw.moveRoute.list) if (r.code === 27) st.S.add(r.parameters[0]);
     }
     if (size() === before) break;
   }
@@ -676,4 +687,172 @@ test("randomized differential: analyzeProgression equals a brute-force explorer 
   }
   const ms = performance.now() - t0;
   assert.ok(ms < 15000, `differential test took ${ms.toFixed(0)} ms`);
+});
+
+// ---- fix round 1 ----
+
+const autoRoute = (...entries) => ({
+  moveType: 3,
+  moveRoute: { list: [...entries.map(([code, parameters]) => ({ code, parameters })), { code: 0, parameters: [] }], repeat: true, skippable: false, wait: false },
+});
+
+test("an autonomous move route (moveType 3) with route code 27 sets its switch when the page can run; 28 and moveType 0 do not", async () => {
+  const gate = (extra, conditions = {}) => ({
+    maps: { 1: { events: [null, event(1, [page([END], { ...extra, conditions })]), door(2, 2, sw(5))] }, 2: {} },
+  });
+  const on = (await run(gate(autoRoute([27, [5]])), { goal: { switch: 5 } })).report;
+  assert.deepEqual(on.reachableMaps, [1, 2]);
+  assert.equal(on.goal.reachable, true);
+  assert.deepEqual(on.switches.neverSet, []);
+  assert.equal(on.uncertainty.confidence, "high");
+  for (const extra of [autoRoute([28, [5]]), { ...autoRoute([27, [5]]), moveType: 0 }]) {
+    const { report } = await run(gate(extra), { goal: { switch: 5 } });
+    assert.deepEqual(report.reachableMaps, [1]);
+    assert.equal(report.goal.reachable, false);
+  }
+  // the route only runs while its page is the one that can be active
+  const gated = (await run(gate(autoRoute([27, [5]]), sw(6)))).report;
+  assert.deepEqual(gated.reachableMaps, [1]);
+});
+
+test("a script in an autonomous move route is counted and lowers the confidence", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, event(1, [page([END], autoRoute([45, ["$gameSwitches.setValue(5, true)"]]))])] } } });
+  assert.equal(report.uncertainty.scriptCommands, 1);
+  assert.equal(report.uncertainty.confidence, "low");
+});
+
+test("a 205 move route turns a switch ON only with route code 27 (28 is switch OFF)", async () => {
+  const gate = (code) => ({
+    maps: {
+      1: {
+        events: [
+          null,
+          npc(1, [c(205, 0, -1, { list: [{ code, parameters: [12] }, { code: 0 }], repeat: false, skippable: false, wait: true })]),
+          door(2, 2, sw(12)),
+        ],
+      },
+      2: {},
+    },
+  });
+  assert.deepEqual((await run(gate(27))).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate(28))).report.reachableMaps, [1]);
+});
+
+test("enabled plugins make the confidence low and are named in a note", async () => {
+  const { index } = await run({});
+  assert.equal(analyzeProgression(index, { limit: 10 }).uncertainty.confidence, "high");
+  const withPlugins = { ...index, hidden: { ...index.hidden, enabledPlugins: 2, enabledPluginNames: ["YEP_Core", "MyQuest"] } };
+  const report = analyzeProgression(withPlugins, { limit: 10 });
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(
+    report.notes.includes(
+      "2 enabled plugin(s) (YEP_Core, MyQuest) can call common events, set switches or move the player through parameters or notetags that this analysis cannot see.",
+    ),
+    report.notes.join("\n"),
+  );
+});
+
+test("dead ends: a transferring common event that runs by itself or from an item means no map is a dead end", async () => {
+  const base = (commonEvents, extra = {}) => ({
+    maps: { 1: { events: [null, door(1, 2), npc(2, [c(126, 0, 3, 0, 0, 1), c(117, 0, 1)])] }, 2: {} },
+    commonEvents,
+    ...extra,
+  });
+  assert.deepEqual((await run(base([null]))).report.deadEndMaps, [2], "control: map 2 is a dead end");
+  const parallel = (await run(base([null, ce(1, [transfer(1)], { trigger: 2, switchId: 0 })]))).report;
+  assert.deepEqual(parallel.deadEndMaps, []);
+  assert.ok(parallel.notes.some((n) => n.startsWith("common event 1 can transfer the player from any map")), parallel.notes.join("\n"));
+  const item = (
+    await run(base([null, ce(1, [transfer(1)])], { items: [null, null, null, { id: 3, name: "Wing", effects: [{ code: 44, dataId: 1 }] }] }))
+  ).report;
+  assert.deepEqual(item.deadEndMaps, []);
+  // a transferring common event that is only called from map 1 does not help map 2
+  const called = (await run(base([null, ce(1, [transfer(1)])]))).report;
+  assert.deepEqual(called.deadEndMaps, [2]);
+});
+
+test("a start map missing from MapInfos.json makes the confidence low with a note", async () => {
+  const { report } = await run({ system: { startMapId: 5 }, maps: { 1: {} } });
+  assert.deepEqual(report.reachableMaps, []);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("start map 5") && n.includes("not listed in MapInfos.json")), report.notes.join("\n"));
+});
+
+test("a direct transfer to a map missing from MapInfos.json is noted and makes the confidence low", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, door(1, 9)] } } });
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(
+    report.notes.some((n) => n.includes("not listed in MapInfos.json: map 9") && n.includes("may be wrong")),
+    report.notes.join("\n"),
+  );
+  // the same transfer on a page that can never run changes nothing
+  const dead = (await run({ maps: { 1: { events: [null, door(1, 9, sw(3))] } } })).report;
+  assert.equal(dead.uncertainty.confidence, "high");
+});
+
+/** 200 maps x 25 events that all call common event 1, which starts a call chain 1 -> 2 -> ... -> 1000. */
+function contextBomb() {
+  const maps = {};
+  for (let m = 1; m <= 200; m++) {
+    maps[m] = { events: [null, ...Array.from({ length: 25 }, (_, i) => npc(i + 1, [c(117, 0, 1), ...(i === 0 && m < 200 ? [transfer(m + 1)] : [])]))] };
+  }
+  const commonEvents = [null];
+  for (let id = 1; id <= 1000; id++) commonEvents.push(ce(id, id < 1000 ? [c(117, 0, id + 1)] : [c(123, 0, "A", 0)]));
+  return { maps, commonEvents };
+}
+
+test("call contexts are capped: a context explosion stops quickly, says so and lowers confidence", async () => {
+  const index = await buildProjectIndex(memoryProject(contextBomb()));
+  const t0 = performance.now();
+  const report = analyzeProgression(index, { limit: 10 });
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
+  assert.equal(report.truncated, true);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("call contexts")), report.notes.join("\n"));
+});
+
+test("after the context cap, self switches set by called common events are still over-approximated (no false dead page)", async () => {
+  const spec = {
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([c(117, 0, 1), END]), page([transfer(2), END], { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } })]),
+        ],
+      },
+      2: {},
+    },
+    commonEvents: [null, ce(1, [c(117, 0, 2)]), ce(2, [c(117, 0, 3)]), ce(3, [c(123, 0, "A", 0)])],
+  };
+  const index = await buildProjectIndex(memoryProject(spec));
+  assert.equal(analyzeProgression(index, { limit: 10 }).truncated, false);
+  const capped = analyzeProgression(index, { limit: 10, maxContexts: 1 });
+  assert.equal(capped.truncated, true);
+  assert.equal(capped.uncertainty.confidence, "low");
+  assert.deepEqual(capped.reachableMaps, [1, 2]);
+});
+
+test("after the context cap, a calling page that only becomes able to run later still gets the coarse self switches", async () => {
+  const selfA = { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } };
+  const spec = {
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([c(117, 0, 1), END]), page([transfer(2), END], selfA)]),
+          event(2, [page([c(117, 0, 2), END], { conditions: sw(9) }), page([transfer(3), END], selfA)]),
+          npc(3, [switchOn(9)]),
+        ],
+      },
+      2: {},
+      3: {},
+    },
+    commonEvents: [null, ce(1, [c(117, 0, 2)]), ce(2, [c(123, 0, "A", 0)])],
+  };
+  const index = await buildProjectIndex(memoryProject(spec));
+  assert.deepEqual(analyzeProgression(index, { limit: 10 }).reachableMaps, [1, 2, 3]);
+  const capped = analyzeProgression(index, { limit: 10, maxContexts: 1 });
+  assert.equal(capped.truncated, true);
+  assert.deepEqual(capped.reachableMaps, [1, 2, 3]);
 });

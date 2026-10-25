@@ -408,3 +408,54 @@ test("find_usages: the tool description documents the location format", async ()
     await fx.cleanup();
   }
 });
+
+// ---- fix round 1: autonomous move routes and enabled plugins ----
+
+test("describeWhere: an autonomous move route on a map page", () => {
+  assert.equal(
+    describeWhere({ source: "map", mapId: 3, eventId: 5, page: 0, field: "moveRoute" }),
+    "Map003 event 5 page 1 autonomous move route",
+  );
+});
+
+test("find_usages lists a switch written by an autonomous move route", async () => {
+  const autonomous = { list: [{ code: 27, parameters: [5] }, { code: 0, parameters: [] }], repeat: true, skippable: false, wait: false };
+  const spec = {
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([END], { moveType: 3, moveRoute: autonomous })]),
+          event(2, [page([END], { conditions: { switch1Valid: true, switch1Id: 5 } })]),
+        ],
+      },
+    },
+  };
+  await withIndex(spec, (index) => {
+    const report = usages(index, "switch", 5, { name: "x" });
+    assert.deepEqual(report.writes, ["Map001 event 1 page 1 autonomous move route"]);
+    assert.deepEqual(report.warnings, []);
+  });
+});
+
+test("uncertainty suffix: enabled plugins soften the warnings too", () => {
+  const index = {
+    refs: [{ kind: "switch", id: 3, role: "read", where: { source: "map", mapId: 1, eventId: 1, page: 0, index: 0 } }],
+    pages: [],
+    hidden: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0, enabledPlugins: 2, enabledPluginNames: ["A", "B"] },
+  };
+  assert.deepEqual(usages(index, "switch", 3, { name: "x" }).warnings, [
+    "switch 3 is read but never set anywhere (always OFF/0 unless a script or plugin sets it) — note: 2 enabled plugins in this project could also set or read it.",
+  ]);
+  assert.deepEqual(usages(index, "map", 8, { name: "x" }).warnings, [
+    "no event transfers the player here and it is not the start map — note: 2 enabled plugins in this project could also send the player here.",
+  ]);
+  index.hidden.scriptCommands = 1;
+  index.hidden.variableTransfers = 1;
+  assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, [
+    "common event 8 is never called — note: 1 script/plugin commands and 2 enabled plugins in this project could also set or read it.",
+  ]);
+  assert.deepEqual(usages(index, "map", 8, { name: "x" }).warnings, [
+    "no event transfers the player here and it is not the start map — note: 2 script, plugin or variable-designated transfer commands and 2 enabled plugins in this project could also send the player here.",
+  ]);
+});
