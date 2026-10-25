@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { validateCommandList } from "../dist/commandList.js";
 import { buildTemplate, templateParamsSchema } from "../dist/eventTemplates.js";
+import { simulateEvent } from "../dist/eventSim.js";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -116,30 +117,30 @@ test("locked_door codes with and without consumeKey", () => {
   const plain = build(params);
   assert.equal(plain.defaultName, "Door");
   assert.equal(plain.pages.length, 1);
-  assert.deepEqual(codes(plain.pages[0].list), [111, 201, 411, 101, 401, 412, 0]);
+  assert.deepEqual(codes(plain.pages[0].list), [111, 201, 0, 411, 101, 401, 0, 412, 0]);
   assert.deepEqual(plain.pages[0].list[0].parameters, [8, 3]);
   assert.deepEqual(plain.pages[0].list[1].parameters, [0, 2, 4, 5, 8, 0]);
   assert.equal(plain.pages[0].list[1].indent, 1);
-  assert.deepEqual(plain.pages[0].list[4].parameters, ["It's locked."]);
+  assert.deepEqual(plain.pages[0].list[5].parameters, ["It's locked."]);
 
   const consume = build({ ...params, consumeKey: true, lockedMessage: "You need the rusty key." });
-  assert.deepEqual(codes(consume.pages[0].list), [111, 126, 201, 411, 101, 401, 412, 0]);
+  assert.deepEqual(codes(consume.pages[0].list), [111, 126, 201, 0, 411, 101, 401, 0, 412, 0]);
   assert.deepEqual(consume.pages[0].list[1].parameters, [3, 1, 0, 1]);
-  assert.deepEqual(consume.pages[0].list[5].parameters, ["You need the rusty key."]);
+  assert.deepEqual(consume.pages[0].list[6].parameters, ["You need the rusty key."]);
 });
 
 test("inn charges the price, heals, and fades the screen", () => {
   const { defaultName, pages } = build({ template: "inn", price: 50, greeting: "Welcome!" });
   assert.equal(defaultName, "Inn");
   const list = pages[0].list;
-  assert.deepEqual(codes(list), [101, 401, 102, 402, 111, 125, 221, 230, 314, 222, 101, 401, 411, 101, 401, 412, 402, 404, 0]);
+  assert.deepEqual(codes(list), [101, 401, 102, 402, 111, 125, 221, 230, 314, 222, 101, 401, 0, 411, 101, 401, 0, 412, 0, 402, 0, 404, 0]);
   assert.deepEqual(list[2].parameters, [["Stay (50\\G)", "Leave"], 1, 0, 2, 0]);
   assert.deepEqual(list[4].parameters, [7, 50, 0]);
   assert.deepEqual(list[5].parameters, [1, 0, 50]);
   assert.deepEqual(list[7].parameters, [30]);
   assert.deepEqual(list[8].parameters, [0, 0]);
-  assert.deepEqual(list[14].parameters, ["Not enough gold."]);
-  assert.deepEqual(list.map((c) => c.indent), [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1, 0, 0, 0]);
+  assert.deepEqual(list[15].parameters, ["Not enough gold."]);
+  assert.deepEqual(list.map((c) => c.indent), [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1, 0, 1, 0, 0]);
   assert.ok(codes(list).includes(314));
 });
 
@@ -314,4 +315,57 @@ test("invalid template params are refused with a readable message and nothing is
     assert.equal(stray.res.isError, true);
     assert.equal(await fs.readFile(mapFile, "utf8"), before);
   });
+});
+
+// ---- the editor's blank end-of-branch rows ----
+
+const SIBLING_OR_CLOSER = new Set([402, 403, 404, 411, 412, 601, 602, 603, 604]);
+
+/** Every branch body ends with {code:0} one indent deeper than the marker that follows it. */
+function assertBranchesEndBlank(list) {
+  let markers = 0;
+  list.forEach((c, i) => {
+    if (!SIBLING_OR_CLOSER.has(c.code)) return;
+    if ((c.code === 402 || c.code === 601) && [102, 301].includes(list[i - 1].code)) return; // first branch: nothing to end
+    markers++;
+    assert.deepEqual(list[i - 1], { code: 0, indent: c.indent + 1, parameters: [] }, `row before index ${i} (code ${c.code})`);
+  });
+  return markers;
+}
+
+const stripBlanks = (list) => list.filter((c) => !(c.code === 0 && c.indent > 0));
+const withoutIndexes = (t) => ({ ...t, unsupported: t.unsupported.map(({ code, message }) => ({ code, message })) });
+const freshState = (over = {}) => ({ switches: {}, variables: {}, selfSwitches: {}, gold: 0, items: {}, ...over });
+const sim = (list, opts, state) => simulateEvent(list, state, { unknownCondition: "stop", commonEvents: () => null, mapId: 1, eventId: 1, ...opts });
+
+test("locked_door and inn end every branch body with the blank row, and the lists stay valid", () => {
+  const door = build({ template: "locked_door", keyItemId: 3, consumeKey: true, destination: { mapId: 2, x: 4, y: 5 } }).pages[0].list;
+  assert.equal(assertBranchesEndBlank(door), 2); // 411 and 412
+  const inn = build({ template: "inn", price: 50 }).pages[0].list;
+  assert.equal(assertBranchesEndBlank(inn), 4); // 411, 412, the second 402 and 404
+  assert.deepEqual(validateCommandList(door), []);
+  assert.deepEqual(validateCommandList(inn), []);
+  // the blank row at the end of an empty or one-command body is the only row of that branch
+  assert.deepEqual(door.slice(0, 5).map((c) => c.code), [111, 126, 201, 0, 411]);
+});
+
+test("simulate_event gives the same result for locked_door and inn with and without the blank rows", () => {
+  const door = build({ template: "locked_door", keyItemId: 3, consumeKey: true, destination: { mapId: 2, x: 4, y: 5 } }).pages[0].list;
+  const inn = build({ template: "inn", price: 50 }).pages[0].list;
+  const runs = [
+    [door, { items: { 3: 1 } }, {}],
+    [door, { items: {} }, {}],
+    [inn, { gold: 100 }, { choices: [0] }],
+    [inn, { gold: 10 }, { choices: [0] }],
+    [inn, { gold: 100 }, { choices: [1] }],
+  ];
+  const seen = new Set();
+  for (const [list, state, opts] of runs) {
+    const a = sim(list, opts, freshState(state));
+    const b = sim(stripBlanks(list), opts, freshState(state));
+    assert.deepEqual(withoutIndexes(a), withoutIndexes(b));
+    assert.equal(a.cosmetic, b.cosmetic);
+    seen.add(`${a.transfers.length}/${a.messages.join("|")}/${a.finalState.gold}`);
+  }
+  assert.ok(seen.size >= 4, "the runs take different paths");
 });

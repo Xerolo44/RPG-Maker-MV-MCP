@@ -3,7 +3,7 @@
 // party and inventory changes, labels, scenes) into an RPG Maker MV event command list with correct
 // indents and block terminators.
 import { z } from "zod";
-import { cmd, type Cmd } from "./commandList.js";
+import { branchEnd, cmd, type Cmd } from "./commandList.js";
 import { shopCommands } from "./shopCommands.js";
 
 export const MAX_DIALOGUE_DEPTH = 8;
@@ -582,7 +582,7 @@ function leafCommands(n: LeafNode, indent: number): Cmd[] {
  */
 function compileBranch(nodes: readonly DialogueNode[] | undefined, indent: number, depth: number, out: Cmd[]): void {
   compileNodes(nodes, indent, depth, out);
-  out.push(cmd(0, indent));
+  out.push(branchEnd(indent));
 }
 
 function compileNodes(nodes: readonly DialogueNode[] | undefined, indent: number, depth: number, out: Cmd[]): void {

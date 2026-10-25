@@ -10,6 +10,14 @@ export function cmd(code: number, indent: number, ...parameters: unknown[]): Cmd
   return { code, indent, parameters };
 }
 
+/**
+ * The blank row the MV editor writes at the end of every block branch body: `{code:0}` at the body's indent (an
+ * empty branch is that row alone). The engine skips it. Shared by the dialogue compiler and the event templates.
+ */
+export function branchEnd(bodyIndent: number): Cmd {
+  return cmd(0, bodyIndent);
+}
+
 /** Returns the list with a trailing `{code:0}` terminator, adding one only if missing. */
 export function terminated(list: Cmd[]): Cmd[] {
   if (list.length > 0 && list[list.length - 1].code === 0) return list;

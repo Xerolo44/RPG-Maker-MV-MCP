@@ -1,7 +1,7 @@
 // Ready-made event templates (chest, locked door, inn, shop, save point, NPC) that
 // compile to complete RPG Maker MV event pages.
 import { z } from "zod";
-import { cmd, terminated, type Cmd } from "./commandList.js";
+import { branchEnd, cmd, terminated, type Cmd } from "./commandList.js";
 import { messageCommands } from "./dialogueTree.js";
 import { shopCommands } from "./shopCommands.js";
 import { DEFAULT_EVENT_PAGE } from "./tools/mapTools.js";
@@ -167,8 +167,8 @@ function lockedDoor(p: Extract<TemplateParams, { template: "locked_door" }>): Ev
   const d = p.destination;
   const list: Cmd[] = [cmd(111, 0, 8, p.keyItemId)];
   if (p.consumeKey) list.push(cmd(126, 1, p.keyItemId, 1, 0, 1));
-  list.push(cmd(201, 1, 0, d.mapId, d.x, d.y, d.direction ?? 0, 0));
-  list.push(cmd(411, 0), ...say(p.lockedMessage ?? "It's locked.", 1), cmd(412, 0));
+  list.push(cmd(201, 1, 0, d.mapId, d.x, d.y, d.direction ?? 0, 0), branchEnd(1));
+  list.push(cmd(411, 0), ...say(p.lockedMessage ?? "It's locked.", 1), branchEnd(1), cmd(412, 0));
   return [page(list)];
 }
 
@@ -185,10 +185,14 @@ function inn(p: Extract<TemplateParams, { template: "inn" }>): EventPage[] {
     cmd(314, 2, 0, 0),
     cmd(222, 2),
     ...say("You feel rested.", 2),
+    branchEnd(2),
     cmd(411, 1),
     ...say("Not enough gold.", 2),
+    branchEnd(2),
     cmd(412, 1),
+    branchEnd(1),
     cmd(402, 0, 1, "Leave"),
+    branchEnd(1),
     cmd(404, 0),
   ];
   return [page(list)];
