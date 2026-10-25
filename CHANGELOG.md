@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-25
+
+### Added
+- **1 new tool** (78 in total): `check_references` (group `analysis`) finds references that point
+  at records which do not exist: a Battle Processing on a missing troop, a shop item, Learn Skill or
+  Change Items on a missing record, a Common Event call, a transfer to a missing map, a page
+  condition on a missing item or actor, an enemy drop or action, a class learning, an actor's
+  class or equipment, a troop member, an item or skill effect, a map encounter list, System
+  `startMapId` and `partyMembers`. It reads the same project index as `find_usages`, so it checks exactly the references
+  `find_usages` lists, against the rows of the database files and the maps listed in
+  `MapInfos.json`. Findings are grouped by kind and id with a reference count and up to three
+  locations, capped by `limit` (default 100) with `truncated`, and every entry has severity
+  `error`. Id 0 ("none") is never reported, switches and variables are not checked, and a database
+  file that is missing or unreadable is named in `notes` instead of being treated as "everything
+  is missing".
+
+### Changed
+- `audit_assets` also scans Change Battle BGM (132), Change Victory ME (133), Change Defeat ME
+  (139), Change Vehicle BGM (140), Change Battle Back (283), Change Parallax (284) and Change
+  Vehicle Image (323) in map events, common events and troops. Empty names are ignored, as before.
+- The `import_asset` description and the README now say precisely when `overwrite` leaves a backup
+  (see Known limitations; the 0.5.0 entry below says it always does, which is not quite true).
+
+### Known limitations
+- `check_references` only sees what the project index sees. It does not see references made by
+  script commands, plugin commands, notetags, plugin parameters, damage formulas or trait codes,
+  Transfer Player and Battle Processing commands that name their target by variable, vehicle start
+  maps, the Conditional Branch tests of class, skill, weapon, armor and state, and commands 314,
+  319, 320, 324, 325, 336 and 339 (the same gaps as `find_usages`). A map that cannot be read is
+  skipped. Its `notes` give the number of such commands in the project; switches and variables are
+  not checked at all.
+- A record exists for `check_references` when its database row has that `id` (the id field is what
+  counts, not the position in the array).
+- The session backup that `import_asset` with `overwrite` relies on snapshots a file once per
+  server session, before its first change. A file created earlier in the same session (for
+  example by an earlier `import_asset`) and then overwritten has no backup of the version that was
+  replaced; the backup holds only the version from before the session. This applies to every
+  project file the server writes, not just assets.
+- The parameter layouts of the newly scanned commands (132, 133, 139, 140, 283, 284, 323) come from
+  knowledge of the MV engine, not from engine source or a real project file, and are unverified.
+- As in 0.5.0, no real RPG Maker MV project or engine was available: nothing in this release was
+  run in the real game. The limitations of 0.5.0 and 0.4.0 below still apply.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

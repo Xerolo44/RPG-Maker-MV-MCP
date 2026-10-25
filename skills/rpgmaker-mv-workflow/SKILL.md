@@ -32,6 +32,7 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 | Generate a dungeon or cave | `generate_map`, then `render_map_image`; reuse pieces with `capture_stamp` / `place_stamp` |
 | Several edits that belong together | `begin_changeset` ... `commit_changeset` |
 | Check events and assets | `lint_events`, `audit_assets`, `simulate_event` |
+| Do any references point at records that do not exist? | `check_references` |
 | Can the player get there? What can never happen? | `analyze_progression` |
 | Translate the game | `export_texts`, `import_texts` |
 | Check the result | `validate_project`, `lint_events`, `audit_assets`, `render_diff`, `playtest_start` |
@@ -44,6 +45,7 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 - **Group multi-step edits in a changeset.** `begin_changeset {label}` stages every following edit in memory (reads show the staged state, nothing is on disk); `commit_changeset` writes it all in one step, `discard_changeset` throws it away, `undo_changeset` rolls back the last commit (and overwrites later edits to those files). One changeset at a time; `restore_backup` is refused while one is open.
 - **Import assets before you reference them.** Put a picture or sound into the project with `import_asset` (absolute local path, nothing is converted; only the file header is checked), confirm it with `list_assets` and look at images with `preview_asset`, and only then use its name in an actor, event or map. `audit_assets` finds references to files that are missing.
 - **`find_usages` before renaming, deleting or reusing an id.** It lists every place a switch, variable, item, skill, common event, map and so on is read, written or used. Its "never set / never read" warnings can miss script and plugin use, so read the note it adds.
+- **`check_references` before a release and after deleting or renaming records.** It reports event commands, page conditions and database fields that name a troop, item, skill, actor, map and so on that does not exist. It cannot see references made by scripts, plugin commands, notetags, plugin parameters or damage formulas (its `notes` count them), it never reports id 0 (none), and it does not check switches or variables. A database file it cannot read is named in `notes`, not reported as everything missing.
 - Tile data is edited only through `paint_tiles`; `update_map` refuses `data` and `events`.
 - Do not delete or rewrite data the user did not ask about. When in doubt, search first (`search_records`) to see what depends on it.
 
@@ -51,6 +53,6 @@ description: Core workflow and safety rules for editing an RPG Maker MV project 
 1. Design it in plain words (what the player sees and does).
 2. Create the data (skills, items, enemies, troops).
 3. Build or edit maps, then events that reference the data.
-4. Name switches/variables, then run `validate_project`, `lint_events` and `audit_assets` (missing images/audio, wrong letter case) before calling it done.
+4. Name switches/variables, then run `validate_project`, `lint_events`, `check_references` (records that do not exist) and `audit_assets` (missing images/audio, wrong letter case) before calling it done.
    Before a release also run `analyze_progression` (add `goal` to ask about one map, switch or event). **Read `uncertainty.confidence` first**: with `low` (script or plugin commands, enabled plugins, ...) "unreachable" and "dead" are only hints; with `high` they are proofs under its model, and "reachable" only means "not ruled out". It does not find soft-locks.
 5. `playtest_start` (NW.js mode captures the console via `playtest_log`) and report what you verified and what you could not.

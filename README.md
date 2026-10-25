@@ -68,8 +68,9 @@ Ask your assistant things like:
   See [Map generation and stamps](#map-generation-and-stamps).
 - **Analysis** — `audit_assets`, `lint_events` and `simulate_event` check an event or the whole
   project without launching the game, see [Analysis](#analysis). `find_usages` shows everywhere an
-  id is read, written or used, and `analyze_progression` asks which maps and events can ever be
-  reached, see [Usage and progression analysis](#usage-and-progression-analysis).
+  id is read, written or used, `check_references` finds references to records that do not exist,
+  and `analyze_progression` asks which maps and events can ever be reached, see
+  [Usage and progression analysis](#usage-and-progression-analysis).
 - **Safety net** — every file is snapshotted to `.mcp-backups/` before its first modification
   each session; `restore_backup` rolls anything back, `validate_project` catches broken
   references before you ship, and [changesets](#changesets-transactional-edits-with-undo) let
@@ -145,7 +146,7 @@ config) — reach for `--http` only if your client specifically requires a URL.
 The server process must stay running for the connector to work — start it in its own
 terminal window before adding the connector, and leave that window open.
 
-## Tool reference (77 tools)
+## Tool reference (78 tools)
 
 | Group | Tools |
 | --- | --- |
@@ -163,7 +164,7 @@ terminal window before adding the connector, and leave that window open.
 | Skill files | `install_skills` |
 | Plugins | `list_plugins`, `configure_plugin`, `add_plugin`, `remove_plugin`, `create_plugin`, `read_plugin`, `write_plugin` |
 | Playtest | `playtest_start`, `playtest_status`, `playtest_log`, `playtest_stop` |
-| Analysis | `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `analyze_progression` |
+| Analysis | `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `check_references`, `analyze_progression` |
 | Assets | `import_asset`, `list_assets`, `preview_asset` |
 | Safety | `list_backups`, `restore_backup`, `validate_project`, `editor_status`, `begin_changeset`, `commit_changeset`, `discard_changeset`, `undo_changeset` |
 
@@ -173,7 +174,7 @@ the schema, so assistants can use the server without external documentation.
 
 ### Tool profiles
 
-All 77 tools are registered by default. Some clients cope better with a shorter tool list, so
+All 78 tools are registered by default. Some clients cope better with a shorter tool list, so
 you can register only some tool groups with `--tools` (a comma-separated list) or the
 environment variable `RPGMV_TOOLS`:
 
@@ -188,7 +189,7 @@ Groups: `project`, `database`, `maps`, `tiles`, `render`, `plugins`, `playtest`,
 name makes the server exit with a message. `install_skills`, resources and prompts are always
 available whatever the profile.
 
-Tools per group (76 tools, plus `install_skills`, which is always on = 77):
+Tools per group (77 tools, plus `install_skills`, which is always on = 78):
 
 - `project` (2): `set_project`, `get_project_info`
 - `database` (12): `list_records`, `get_record`, `update_record`, `create_record`, `get_system`, `set_switch_name`, `set_variable_name`, `update_system`, `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill`
@@ -204,7 +205,7 @@ Tools per group (76 tools, plus `install_skills`, which is always on = 77):
 - `localization` (2): `export_texts`, `import_texts`
 - `authoring` (2): `build_dialogue_tree`, `create_event_from_template`
 - `generation` (4): `generate_map`, `capture_stamp`, `place_stamp`, `list_stamps`
-- `analysis` (5): `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `analyze_progression`
+- `analysis` (6): `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `check_references`, `analyze_progression`
 - `assets` (3): `import_asset`, `list_assets`, `preview_asset`
 
 ### Changesets (transactional edits with undo)
@@ -311,8 +312,10 @@ path separators, and is not a reserved Windows device name (`CON`, `NUL`, `COM1`
 `!$Chest`) is a one-character sheet; a `!` means no vertical offset on the map.
 
 **Backups and changesets.** An existing file with the same name (letter case ignored) is only
-replaced with `overwrite: true`, and the old file goes to the session backup in `.mcp-backups/` like
-any other edit (`list_backups`, `restore_backup`). Binary files cannot be staged, so `import_asset`
+replaced with `overwrite: true`. Like any other edit, the first change to a file in a server session
+snapshots it to `.mcp-backups/` (`list_backups`, `restore_backup`), so the backup holds the file as it was
+before the session: a file that was created, or already replaced, earlier in the same server session has
+no backup of that intermediate version. Binary files cannot be staged, so `import_asset`
 is refused while a changeset is open; commit or discard it first. Nothing is written when an import
 is refused. For audio, a warning tells you when the `.ogg` or `.m4a` twin is missing (MV's web
 build needs both).
@@ -357,7 +360,8 @@ events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
 Checks that need no running game:
 
 - `audit_assets` — every image and audio file the project references (actors, enemies,
-  tilesets, maps, event pages, a set of event commands, System) must exist; also lists case
+  tilesets, maps, event pages, a set of event commands (face, picture, audio, battle back,
+  parallax, actor and vehicle graphics), System) must exist; also lists case
   mismatches (fine on Windows, broken on Linux/macOS/web) and optionally unused files. The
   result lists what is **not** scanned (for example plugin parameters), so "unused" can include
   files that only plugins use.
@@ -383,7 +387,7 @@ Checks that need no running game:
 
 ## Usage and progression analysis
 
-Both tools read the whole project (staged changeset data included) and never run the game.
+These tools read the whole project (staged changeset data included) and never run the game.
 
 - `find_usages {kind, id, limit?}` lists every place one switch, variable, item, weapon, armor,
   skill, state, actor, class, enemy, troop, common event or map is **read**, **written** or
@@ -393,6 +397,16 @@ Both tools read the whole project (staged changeset data included) and never run
   and warnings: a switch or variable that is read but never set (or set but never read), a common event
   nothing calls, a map nothing transfers to, an id without a name. Use it before renaming, deleting
   or reusing an id.
+- `check_references {limit?}` finds references that point at records which do not exist: a Battle
+  Processing on troop 1 when there is no troop 1, a shop item 7, Learn Skill 12, actor 5, a transfer
+  to a deleted map, an enemy drop or class learning that names a missing record. It checks exactly
+  the references `find_usages` indexes (event commands, page conditions, enemy drops and actions,
+  class learnings, actor class and equipment, troop members, item and skill effects, encounter
+  lists, System `startMapId` and `partyMembers`) against the database files and `MapInfos.json`,
+  groups the findings by kind and id with a count and up to three locations, and lists in `notes`
+  what it did not check. Id 0 ("none") is never reported, and switches and variables are not
+  checked. A database file that is missing or unreadable is named in `notes` instead of reporting
+  everything as missing. Run it before a release and after deleting or renaming records.
 - `analyze_progression {goal?, includeGraph?, limit?}` follows the game from the start map and
   reports the reachable and unreachable maps, maps with no way out, event pages that can never
   run (with the first condition that is never met), switches and variables that are read but never
@@ -410,7 +424,9 @@ evaluated JavaScript and can set switches and variables), script commands and
 plugin commands, transfers and battles whose target is a variable, enabled plugins and their
 parameters and notetags (they can call common events, set switches or move the player), and
 vehicles' start maps. It never models switches turning off and does not detect soft-locks.
-`find_usages` does not index every command either; the list is in [CHANGELOG.md](CHANGELOG.md).
+`find_usages` does not index every command either, and `check_references` sees only what the index
+sees (references made by script or plugin commands, notetags, plugin parameters, damage formulas and
+variable-designated commands are invisible to it); the list is in [CHANGELOG.md](CHANGELOG.md).
 Both tools build the project index in memory: a hostile or machine-generated project with very large
 Control Switches / Variables commands covering whole id ranges can use a lot of memory and time
 (about 1.2 GB were measured for 5000 events expanding to about 10 million references).
