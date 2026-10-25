@@ -34,6 +34,13 @@ Erasing needs an explicit layer: `{tile: 0, layer: 2, ...}`.
 - Vary the ground: a second A2 kind in patches looks much better than one flat fill.
 - Keep doors and exits 1 tile wide and mark them clearly.
 
+## Your own tilesets and character sprites
+Bring the pictures in with the asset tools instead of asking the user to copy files by hand:
+1. `import_asset {source, folder, name?}` with an **absolute** local path - `img/tilesets` for tileset sheets, `img/characters` for sprites. Only the file header is checked (PNG signature) and nothing is converted or resized. The answer's `warnings` flag a wrong sheet size (a tileset sheet should be 768 wide, or 384 for half-resolution sheets; a character sheet must divide into 12x8 frames, or 3x4 for a `$` name). It is refused while a changeset is open, and an existing file is replaced only with `overwrite: true`.
+2. `list_assets {folder}` shows the files and what uses them; `preview_asset {folder, name}` shows the image, with the frame layout for `img/characters` and `img/faces`, so you can check it before using it.
+3. Use it: put the file name (no extension) into the tileset record's `tilesetNames` (`get_record` the tileset first, then `update_record`), or into an event page's `image: {characterName, characterIndex, direction, pattern}`. A `$` prefix (`$Guard`) means one character per sheet (`characterIndex` 0); otherwise a sheet holds 8 characters (`characterIndex` 0-7); a `!` prefix means no vertical offset on the map.
+4. `render_map_image` now draws the new tiles and sprites; `audit_assets` reports any reference whose file is missing or differs in letter case.
+
 ## Generating dungeons and caves
 `generate_map` makes a seeded dungeon (rooms and corridors) or cave and paints it, so you do not paint a maze by hand:
 1. `generate_map {kind, create: {name, width, height, tilesetId}}` (or `mapId` for an existing empty map; a map with tiles or events needs `overwrite: true`). Pass `markers: {entrance, exit, chests}` and a `seed` if you want the result repeatable. The seed, the tile profile used (`profileUsed`, suggested from the tileset unless you pass `profile`) and the marker positions come back.

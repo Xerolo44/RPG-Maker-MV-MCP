@@ -218,6 +218,20 @@ test("compileDialogue throws instead of producing a malformed list", () => {
   assert.throws(() => compileDialogue([node]), /maximum is 8/);
 });
 
+test("presentation nodes compile inside choice and if bodies and keep the block structure valid", () => {
+  const list = valid([
+    {
+      choices: [
+        { label: "Go", then: [{ if: { switch: 1 }, then: [{ fade: "out" }, { wait: 10 }], else: [{ moveRoute: { target: "this", steps: ["up"] } }] }] },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    list.map((c) => [c.code, c.indent]),
+    [[102, 0], [402, 0], [111, 1], [221, 2], [230, 2], [411, 1], [205, 2], [505, 2], [412, 1], [404, 0]],
+  );
+});
+
 test("every compiled tree passes validateCommandList(terminated(...))", () => {
   valid([
     { say: ["a", "b", "c", "d", "e"], face: { name: "Actor1", index: 0 } },
@@ -412,6 +426,68 @@ test("add_event_command still accepts an index on a 401 continuation line", asyn
     assert.ok(!res.isError, res.content[0].text);
     const list = JSON.parse(await fs.readFile(mapFile, "utf8")).events[1].pages[0].list;
     assert.deepEqual(codes(list), [101, 108, 401, 401, 0]);
+  });
+});
+
+test("build_dialogue_tree index on a 505 route row or a 601-604 battle line is refused; add_event_command is unchanged", async () => {
+  await withProjectServer(async (client, { mapFile }) => {
+    const step = () => ({ code: 1, parameters: [], indent: null });
+    const route = { list: [step(), { code: 0, parameters: [] }], repeat: false, skippable: false, wait: true };
+    const base = [
+      cmd(205, 0, 0, route), // 0
+      cmd(505, 0, step()), // 1
+      cmd(301, 0, 0, 1, true, false), // 2
+      cmd(601, 0), // 3
+      cmd(101, 1, "", 0, 0, 2), // 4
+      cmd(401, 1, "won"), // 5
+      cmd(602, 0), // 6
+      cmd(401, 1, "ran"), // 7
+      cmd(604, 0), // 8
+      cmd(0, 0), // 9
+    ];
+    const reset = async () => {
+      const map = JSON.parse(await fs.readFile(mapFile, "utf8"));
+      map.events[1].pages[0].list = structuredClone(base);
+      await fs.writeFile(mapFile, JSON.stringify(map), "utf8");
+      return JSON.stringify(map);
+    };
+    const codesNow = async () => codes(JSON.parse(await fs.readFile(mapFile, "utf8")).events[1].pages[0].list);
+    const message = (r) => r.res.content[0].text;
+
+    // index 1 is the 505 row of the route: a multi-line command
+    const before505 = await reset();
+    const r505 = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index: 1 });
+    assert.equal(r505.res.isError, true);
+    assert.match(message(r505), /inside a multi-line command/);
+    assert.match(message(r505), /code 505/);
+    assert.equal(await fs.readFile(mapFile, "utf8"), before505);
+
+    // 3 = 601, 6 = 602, 8 = 604: inserting there would land inside the preceding branch body
+    for (const index of [3, 6, 8]) {
+      const before = await reset();
+      const r = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.equal(r.res.isError, true, `index ${index}`);
+      assert.match(message(r), /inside a block/, `index ${index}`);
+      assert.equal(await fs.readFile(mapFile, "utf8"), before, `index ${index}`);
+    }
+
+    // between whole commands (before the 205, before the 301, at the terminator) still works
+    for (const index of [0, 2, 9]) {
+      await reset();
+      const r = await tool(client, { tree: [{ say: "new" }], mapId: 1, eventId: 1, index });
+      assert.ok(!r.res.isError, `index ${index}: ${message(r)}`);
+      assert.equal(r.body.inserted.at, index);
+    }
+
+    // add_event_command has no block / continuation rule and keeps inserting at exactly those positions
+    for (const index of [1, 3, 6, 8]) {
+      await reset();
+      const res = await client.callTool({ name: "add_event_command", arguments: { mapId: 1, eventId: 1, index, commands: [cmd(108, 0, "note")] } });
+      assert.ok(!res.isError, res.content[0].text);
+      const now = await codesNow();
+      assert.equal(now[index], 108, `index ${index}`);
+      assert.equal(now.length, base.length + 1);
+    }
   });
 });
 

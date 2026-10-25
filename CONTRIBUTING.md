@@ -29,8 +29,14 @@ src/
 ├── passability.ts           map passability following MV's checkPassage rule (pure)
 ├── lint.ts                  static checks for event command lists (lint_events)
 ├── assets.ts                asset reference scan against the files on disk (audit_assets)
+├── assetFormats.ts          asset folders, name and source-path rules, magic-byte type checks (pure)
+├── assetCatalog.ts          file listing with usage for list_assets (reads through Project)
 ├── eventSim.ts              dry-run interpreter for event command lists (simulate_event, pure)
 ├── dialogueTree.ts          dialogue tree to event commands compiler (build_dialogue_tree, pure)
+├── shopCommands.ts          302/605 shop command builder shared by dialogueTree and eventTemplates (leaf module)
+├── eventIndex.ts            project-wide event page and reference index (reads through Project)
+├── usages.ts                find_usages queries and warnings over the index
+├── progression.ts           analyze_progression fixpoint and map graph over the index (pure)
 ├── eventTemplates.ts        chest/door/inn/shop/save point/NPC templates (create_event_from_template, pure)
 ├── mapDiff.ts               tile and event diff between two map files (render_diff, pure)
 ├── stamps.ts                capture/place map stamps stored in .mcp-stamps/
@@ -53,6 +59,7 @@ src/
     ├── skillTools.ts        high-level skill creation helpers
     ├── searchTools.ts       search across databases and map events
     ├── mapTools.ts          maps, events, event commands, dialogue helper
+    ├── assetTools.ts        import_asset, list_assets, preview_asset
     ├── authoringTools.ts    build_dialogue_tree, create_event_from_template
     ├── generationTools.ts   generate_map, capture_stamp, place_stamp, list_stamps
     ├── tileTools.ts         tilesets and paint_tiles / render_map
@@ -64,13 +71,16 @@ src/
     ├── playtestTools.ts     NW.js / browser playtesting
     ├── maintenanceTools.ts  backups, editor_status and project validation
     ├── changesetTools.ts    begin/commit/discard/undo_changeset
-    └── analysisTools.ts     audit_assets, lint_events, simulate_event
+    ├── analysisTools.ts     audit_assets, lint_events, simulate_event, find_usages
+    └── progressionTools.ts  analyze_progression (registered from analysisTools.ts)
 skills/                      bundled SKILL.md workflow guides (shipped in the npm package)
 scripts/
 ├── smoke.mjs                end-to-end smoke test
 └── run-unit.mjs             runs every test/*.test.mjs with node --test (Node 18 has no --test globs)
 test/                        unit tests (node:test, *.test.mjs) importing the compiled ../dist/ modules;
                              run `npm run build` before `npm run test:unit`
+└── helpers/
+    └── fixtureProject.mjs   builds a throwaway MV-shaped project on disk from plain objects (not a test)
 ```
 
 ## Guidelines
@@ -78,10 +88,13 @@ test/                        unit tests (node:test, *.test.mjs) importing the co
 - **Every project write goes through `Project`.** Use `project.writeJson()` for data files
   and `project.writeText()` for anything else (plugins.js, plugin sources, exported files).
   They take the session backup, keep editor_status's external-change tracking accurate and,
-  while a changeset is open, stage the edit instead of writing it. Never write project files
-  with `fs` directly (and do not just call `project.backup()` before an `fs` write): that
-  bypasses an open changeset. Likewise read with `project.readJson()` / `readText()` and
-  check existence with `project.exists()`, so staged content is respected.
+  while a changeset is open, stage the edit instead of writing it. Binary files (imported
+  images and sounds) go through `project.writeBinary()`: same backup and tracking, but binary
+  content cannot be staged, so it is refused while a changeset is open (a tool should check
+  `project.changesetActive` before reading its source, as `import_asset` does). Never write
+  project files with `fs` directly (and do not just call `project.backup()` before an `fs`
+  write): that bypasses an open changeset. Likewise read with `project.readJson()` /
+  `readText()` and check existence with `project.exists()`, so staged content is respected.
 - **Match the MV editor's file format.** Data arrays are 1-indexed with `null` at
   index 0; array files are written one element per line; ids must equal array
   positions. `project.writeJson()` handles the formatting.
@@ -99,7 +112,8 @@ test/                        unit tests (node:test, *.test.mjs) importing the co
 
 Releases are automatic. To ship a new version, include these in a PR to `main`:
 
-1. Bump `version` in `package.json`, and both `version` fields in `server.json`.
+1. Bump `version` in `package.json`, both `version` fields in `server.json`, and keep the server
+   version in `src/index.ts` and the two `version` fields at the top of `package-lock.json` in step.
 2. Add a `## [X.Y.Z] - date` section to `CHANGELOG.md` (it becomes the GitHub Release notes).
 
 When the PR is merged, `.github/workflows/release.yml` sees a version without a GitHub Release,

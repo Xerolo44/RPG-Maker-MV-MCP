@@ -1,6 +1,6 @@
 // Pure interpreter for a subset of RPG Maker MV event commands. It never touches the project:
 // callers supply the command list, a starting state and a common-event lookup, and get a trace back.
-import type { Cmd } from "./commandList.js";
+import { battleHasBranches, type Cmd } from "./commandList.js";
 import { mulberry32 } from "./battle.js";
 
 export interface SimState {
@@ -20,6 +20,8 @@ export interface SimOptions {
   /** What an unsupported condition does: take the then branch, take the else branch, or stop. */
   unknownCondition: "then" | "else" | "stop";
   commonEvents: (id: number) => Cmd[] | null;
+  /** How every Battle Processing (301) ends: which of the If Win / If Escape / If Lose branches runs (default "win"). */
+  battleResult?: "win" | "escape" | "lose";
   /** Identify the simulated event; the interpreter itself does not need them. */
   mapId: number;
   eventId: number;
@@ -31,6 +33,8 @@ export interface SimTrace {
   transfers: { mapId: number; x: number; y: number }[];
   /** Commands that were not simulated. index is the position in the list that holds the command (a common event's own list for calls made inside one). */
   unsupported: { index: number; code: number; message: string }[];
+  /** How many presentation commands (fades, waits, audio, pictures, move routes and the like) were run and ignored; they are not listed in unsupported. */
+  cosmetic: number;
   ended: "end" | "exit" | "transfer" | "stepLimit" | "unsupported";
   finalState: SimState;
   /** Entries dropped from messages, changes and unsupported once each reached MAX_TRACE_ENTRIES; only present when something was dropped. finalState stays exact. */
@@ -44,7 +48,15 @@ export const MAX_TRACE_ENTRIES = 2000;
 /** Longest switch/variable range one command may touch. */
 const MAX_RANGE = 1000;
 const MAX_ITEMS = 99;
+/** Longest route scanned for switch commands per Set Movement Route; the scanned entries are charged against MAX_STEPS. */
+const MAX_ROUTE_ENTRIES = MAX_RANGE;
+/** Highest switch id a move route may set (Control Switches has no absolute cap, so this keeps finalState keys sane). */
+const MAX_ROUTE_SWITCH_ID = 100000;
 const SELF_SWITCHES = ["A", "B", "C", "D"];
+/** Commands that only change what the player sees or hears; they are skipped and counted in SimTrace.cosmetic. */
+const COSMETIC_CODES = new Set([205, 212, 213, 221, 222, 223, 224, 225, 230, 231, 235, 236, 241, 242, 245, 246, 249, 250, 251, 505]);
+/** Battle Processing branch opener per battleResult. */
+const BATTLE_BRANCH = { win: 601, escape: 602, lose: 603 } as const;
 /** Code of the stand-in for an entry that is not a usable command. */
 const MALFORMED = -1;
 
@@ -145,9 +157,10 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     gold: state.gold,
     items: { ...state.items },
   };
-  const trace: SimTrace = { messages: [], changes: [], transfers: [], unsupported: [], ended: "end", finalState: s };
+  const trace: SimTrace = { messages: [], changes: [], transfers: [], unsupported: [], ended: "end", cosmetic: 0, finalState: s };
   const rng = mulberry32(opts.seed ?? 0);
   const answers = opts.choices ?? [];
+  const battleResult: keyof typeof BATTLE_BRANCH = opts.battleResult === "escape" || opts.battleResult === "lose" ? opts.battleResult : "win";
   let nextAnswer = 0;
   let steps = 0;
 
@@ -213,6 +226,35 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
     if (ids.length > 1) change(`${label} ${["=", "+=", "-=", "*=", "/=", "%="][op]} ${value}`);
   }
 
+  /**
+   * Set Movement Route: the route is cosmetic, but Switch ON/OFF route commands (27, 28) still change the switches.
+   * At most MAX_ROUTE_ENTRIES entries are scanned (a longer route adds one unsupported note) and every scanned entry
+   * costs one step, so total work stays bounded by MAX_STEPS. Returns true when that budget is used up.
+   * Malformed routes are ignored.
+   */
+  function moveRoute(p: unknown[], index: number): boolean {
+    const route = p[1];
+    const list = typeof route === "object" && route !== null ? (route as { list?: unknown }).list : undefined;
+    if (!Array.isArray(list)) return false;
+    const scanned = Math.min(list.length, MAX_ROUTE_ENTRIES);
+    steps += scanned;
+    if (steps > MAX_STEPS) return true;
+    if (list.length > MAX_ROUTE_ENTRIES) {
+      note(index, 205, `move route has ${list.length} entries; only the first ${MAX_ROUTE_ENTRIES} were scanned for switch commands`);
+    }
+    for (let k = 0; k < scanned; k++) {
+      const step = list[k];
+      if (typeof step !== "object" || step === null) continue;
+      const { code, parameters } = step as { code?: unknown; parameters?: unknown };
+      if ((code !== 27 && code !== 28) || !Array.isArray(parameters)) continue;
+      const id = parameters[0];
+      if (!isInt(id) || id < 1 || id > MAX_ROUTE_SWITCH_ID) continue;
+      s.switches[id] = code === 27;
+      change(`switch ${id} → ${code === 27 ? "ON" : "OFF"} (move route)`);
+    }
+    return false;
+  }
+
   function run(rawList: unknown, depth: number): Signal {
     const cmds = normalize(rawList);
     let i = 0;
@@ -224,7 +266,7 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
       i++;
       switch (c.code) {
         case 0: // terminator or end of a branch body
-        case 101: case 108: case 408: case 112: case 118: case 404: case 412:
+        case 101: case 108: case 408: case 112: case 118: case 404: case 412: case 604:
         case 655:
           break;
         case MALFORMED:
@@ -279,6 +321,40 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           for (let j = index - 1; j >= 0; j--) {
             if (cmds[j].indent === c.indent && cmds[j].code === 112) { i = j + 1; break; }
           }
+          break;
+        }
+        case 301: {
+          if (!battleHasBranches(cmds, index)) {
+            // No branches (the editor writes none without Can Escape / Continue when Loss): the commands after it run.
+            if (battleResult === "escape" && !p[2]) change("battle: cannot escape (canEscape is false)");
+            if (battleResult === "lose" && !p[3]) change("battle: cannot lose (canLose is false)");
+            break;
+          }
+          const end = findForward(cmds, index, c.indent, [604]);
+          const stop = end === -1 ? cmds.length : end;
+          const wanted = BATTLE_BRANCH[battleResult];
+          let target = -1;
+          for (let j = index + 1; j < stop; j++) {
+            if (cmds[j].indent === c.indent && cmds[j].code === wanted) { target = j; break; }
+          }
+          // The caller asked for this outcome, so the branch still runs; the engine could not produce it though.
+          if (battleResult === "escape" && !p[2]) change("battle: cannot escape (canEscape is false)");
+          if (battleResult === "lose" && !p[3]) change("battle: cannot lose (canLose is false)");
+          if (target === -1) change(`battle: no ${battleResult} branch`);
+          i = target === -1 ? stop : target + 1;
+          break;
+        }
+        case 601: case 602: case 603: {
+          // The end of the branch that was run (or a branch reached without its 301): skip the others.
+          const end = findForward(cmds, index, c.indent, [604]);
+          i = end === -1 ? cmds.length : end;
+          break;
+        }
+        case 119: {
+          if (typeof p[0] !== "string") { note(index, 119, "malformed Jump to Label parameters"); break; }
+          const target = cmds.findIndex((x) => x.code === 118 && x.parameters[0] === p[0]);
+          if (target === -1) { note(index, 119, `Jump to Label: no label named "${p[0]}" in this command list`); break; }
+          i = target + 1;
           break;
         }
         case 113: {
@@ -353,7 +429,12 @@ export function simulateEvent(list: Cmd[], state: SimState, opts: SimOptions): S
           note(index, 355, "script commands are not executed");
           break;
         default:
-          note(index, c.code, "command is not simulated");
+          if (COSMETIC_CODES.has(c.code)) {
+            trace.cosmetic++;
+            if (c.code === 205 && moveRoute(p, index)) return "stepLimit";
+          } else {
+            note(index, c.code, "command is not simulated");
+          }
       }
     }
     return undefined;

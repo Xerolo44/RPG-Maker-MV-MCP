@@ -15,11 +15,14 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
     {
       title: "Build dialogue tree",
       description:
-        "Compiles a nested dialogue tree into correctly indented event commands (messages, choices, conditions, switches, variables, transfers) " +
-        "and optionally inserts it into an event page, so you never hand-write indents or block terminators. " +
+        "Compiles a nested tree of nodes into correctly indented event commands and optionally inserts it into an event page, so you never hand-write indents, " +
+        "block terminators or move-route rows. Covers dialogue, branching, switches and variables, cutscenes (screen effects, audio, pictures, animations, move routes) " +
+        "and game flow (battles, shops, items, gold, party, scenes, labels). " +
         "With mapId + eventId the commands are inserted at indent 0 before the page's end (or at `index`), like add_event_command; " +
         "without them, or with dryRun, nothing is written and the compiled commands are returned in `preview`. " +
-        "`tree` is an array of nodes, nested at most 8 levels deep. Node vocabulary: " +
+        "`tree` is an array of nodes; every node is an object with one main key, and unknown keys are rejected. choices, if and battle bodies nest at most 8 levels deep (each body counts as a level). " +
+        "A node that is invalid anywhere in the tree fails the whole call and nothing is written. Node vocabulary, in three groups. " +
+        "(1) MESSAGES AND FLOW: " +
         '{say: string | string[], face?: {name, index}, background?: 0|1|2, position?: 0|1|2} (4 lines per message box; "\\n" splits lines; control codes like \\C[2] are kept as written); ' +
         '{choices: [{label, then?: Node[]}] (1-6), cancel?: "disallow" (default) | "branch" | choiceIndex}; ' +
         '{if: Condition, then?: Node[], else?: Node[]} with Condition = {switch, is?} | {variable, op: "eq"|"ne"|"gt"|"gte"|"lt"|"lte", value} | {selfSwitch: "A".."D", is?} | {gold} (party has at least) | {item} (party has item); ' +
@@ -28,6 +31,31 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
         "Example: " +
         '[{"say":"Will you help?","face":{"name":"Actor1","index":0}},' +
         '{"choices":[{"label":"Yes","then":[{"setSwitch":{"id":5,"value":true}},{"say":"Thank you!"}]},{"label":"No","then":[{"say":"A pity."}]}],"cancel":"branch"}]. ' +
+        "(2) CUTSCENE, where target is \"player\" | \"this\" (the running event) | a positive event id: " +
+        '{wait: 1-6000} (frames; 60 = 1 second) | {fade: "out"|"in"} | ' +
+        "{tint: {r, g, b: -255..255, gray: 0-255, frames?: 1-600 (60), wait?: true}} | {flash: {r, g, b: 0-255, intensity: 0-255, frames?: 1-600 (60), wait?: true}} | " +
+        "{shake: {power?: 1-9 (5), speed?: 1-9 (5), frames?: 1-600 (30), wait?: true}} | " +
+        '{weather: {type: "none"|"rain"|"storm"|"snow", power?: 1-9 (5), frames?: 1-600 (60), wait?: false}} | ' +
+        '{playAudio: {kind: "bgm"|"bgs"|"me"|"se", name (use "" to stop that channel), volume?: 0-100 (90), pitch?: 50-150 (100), pan?: -100..100 (0)}} | ' +
+        '{fadeAudio: {kind: "bgm"|"bgs", seconds: 1-60}} | ' +
+        '{showPicture: {id: 1-100, name, origin?: "upperLeft"|"center", x, y, scaleX?: 0-2000 (100), scaleY?: 0-2000 (100), opacity?: 0-255 (255), blend?: "normal"|"add"|"multiply"|"screen"}} | ' +
+        "{erasePicture: 1-100} | {animation: {target, animationId, wait?: true}} | {balloon: {target, balloonId: 1-10, wait?: true}} | " +
+        "{moveRoute: {target, steps: 1-100 steps, repeat?: false, skippable?: false, wait?: true}} (compiles to command 205 plus one 505 row per step). " +
+        "A route step is one of the strings down, left, right, up, turnDown, turnLeft, turnRight, turnUp, walkAnimOn, walkAnimOff, stepAnimOn, stepAnimOff, dirFixOn, dirFixOff, throughOn, throughOff, transparentOn, transparentOff, " +
+        "or an object {jump: {x, y}} (relative tiles, -1000..1000) | {wait: 1-999} | {switchOn: id} | {switchOff: id} | {speed: 1-6} | {frequency: 1-5}. " +
+        "A repeating route never finishes, so with repeat: true wait defaults to false and an explicit wait: true is rejected. " +
+        'Example: [{"fade":"out"},{"playAudio":{"kind":"bgm","name":"Theme1"}},{"moveRoute":{"target":"player","steps":["up","up",{"wait":10},"turnLeft"]}},{"fade":"in"}]. ' +
+        "(3) GAME FLOW: " +
+        '{battle: {troopId, canEscape?: false, canLose?: false, onWin?: Node[], onEscape?: Node[] (needs canEscape: true), onLose?: Node[] (needs canLose: true)}} (like the editor, branches are written only when canEscape or canLose is true or onWin has nodes: then 601, plus 602 with canEscape and 603 with canLose even when empty, and the closer 604; with neither, just the battle command is written and what follows runs after the battle; a body for a branch whose box is off is rejected) | ' +
+        '{shop: {goods: [{type: "item"|"weapon"|"armor", id, price?}] (1-40; omit price for the database price), purchaseOnly?: false}} | ' +
+        "{callCommon: commonEventId} | {label: name} | {jump: label name} (jump to a label in the same list) | {exit: true} (stop this event) | {comment: string | string[]} (not shown in game) | " +
+        "{gold: n} (positive gives, negative takes; not 0) | " +
+        '{item: {kind: "item"|"weapon"|"armor", id, count}} (positive adds, negative removes, not 0, |count| <= 99; weapons/armors only change the inventory, not equipped gear) | ' +
+        '{party: {actorId, action: "add"|"remove", initialize?: false}} (initialize resets the actor when added) | {learnSkill: {actorId, skillId, forget?: false}} | ' +
+        "{recoverAll: true} (full HP/MP/states for the whole party) | {nameInput: {actorId, maxChars: 1-16}} | {plugin: \"Command arg1 arg2\"} (plugin command) | " +
+        '{scene: "menu"|"save"|"gameOver"|"title"}. ' +
+        'Example: [{"battle":{"troopId":3,"canLose":true,"onWin":[{"gold":200},{"item":{"kind":"item","id":1,"count":2}}],"onLose":[{"say":"Defeated..."},{"scene":"gameOver"}]}},' +
+        '{"shop":{"goods":[{"type":"item","id":1},{"type":"weapon","id":2,"price":300}]}}]. ' +
         "Returns { commands, inserted?, problems, preview? }; preview is included for dry runs and for trees of up to 40 commands.",
       inputSchema: {
         tree: z.array(dialogueNodeSchema).min(1).describe("Dialogue nodes, in order"),
@@ -39,7 +67,7 @@ export function registerAuthoringTools(server: McpServer, project: Project): voi
           .int()
           .min(0)
           .optional()
-          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator). Positions inside a conditional or choice body, or on a continuation line of a multi-line command (text, comment, script or shop lines: 401, 405, 408, 605, 655), are refused"),
+          .describe("Position in the page's command list to insert at; defaults to the end (before the terminator). Positions inside a conditional, choice or battle body (the branch markers 402, 403, 404, 411, 412, 413, 601, 602, 603, 604 count as inside), or on a continuation line of a multi-line command (text, comment, move route, script or shop lines: 401, 405, 408, 505, 605, 655), are refused"),
         dryRun: z.boolean().default(false).describe("Compile and validate only; never touches the project files"),
       },
     },

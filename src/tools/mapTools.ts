@@ -80,7 +80,7 @@ async function readMap(project: Project, mapId: number): Promise<MvMap> {
 }
 
 /** Codes that continue or close a block: commands placed just before one of them belong to the preceding body. */
-const BLOCK_CONTINUATION_CODES = new Set([402, 403, 404, 411, 412, 413]);
+const BLOCK_CONTINUATION_CODES = new Set([402, 403, 404, 411, 412, 413, 601, 602, 603, 604]);
 
 /**
  * Indent a command inserted at `index` would need to sit at the same nesting level as its neighbours
@@ -105,9 +105,10 @@ export async function insertionIndent(
 
 /**
  * Command codes that only continue the command before them: 401 text line, 405 scrolling text line,
- * 408 comment line, 605 shop good, 655 script line. Inserting before one splits a multi-line command.
+ * 408 comment line, 505 move route step, 605 shop good, 655 script line. Inserting before one splits a
+ * multi-line command.
  */
-const MULTILINE_CONTINUATION_CODES = new Set([401, 405, 408, 605, 655]);
+const MULTILINE_CONTINUATION_CODES = new Set([401, 405, 408, 505, 605, 655]);
 
 /**
  * The continuation code of the command a new insertion at `index` would push down, or undefined when the

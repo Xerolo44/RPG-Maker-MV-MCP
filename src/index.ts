@@ -23,13 +23,14 @@ import { registerLocalizationTools } from "./tools/localizationTools.js";
 import { registerAnalysisTools } from "./tools/analysisTools.js";
 import { registerAuthoringTools } from "./tools/authoringTools.js";
 import { registerGenerationTools } from "./tools/generationTools.js";
+import { registerAssetTools } from "./tools/assetTools.js";
 import { registerKnowledge } from "./knowledge.js";
 import { parseProfile, type Group } from "./profiles.js";
 
 async function main(): Promise<void> {
   const server = new McpServer({
     name: "rpgmaker-mv-mcp",
-    version: "0.4.0",
+    version: "0.5.0",
   });
 
   const project = new Project();
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
   if (enabled.has("analysis")) registerAnalysisTools(server, project);
   if (enabled.has("authoring")) registerAuthoringTools(server, project);
   if (enabled.has("generation")) registerGenerationTools(server, project);
+  if (enabled.has("assets")) registerAssetTools(server, project);
   registerKnowledge(server, project);
 
   const httpFlag = args.indexOf("--http");

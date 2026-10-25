@@ -1,0 +1,1204 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { buildProjectIndex } from "../dist/eventIndex.js";
+import { analyzeProgression, analyzeProgressionDetailed, progressionGraph } from "../dist/progression.js";
+import { summarize } from "../dist/tools/progressionTools.js";
+import { mulberry32 } from "../dist/battle.js";
+import { c, END, createFixtureProject, event, page } from "./helpers/fixtureProject.mjs";
+
+const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
+
+/** Builds a fixture project on disk, indexes it and returns { index, report } for the given options. */
+async function run(spec, opts = {}) {
+  const { project, cleanup } = await createFixtureProject(spec);
+  try {
+    const index = await buildProjectIndex(project);
+    return { index, report: analyzeProgression(index, { limit: 1000, ...opts }) };
+  } finally {
+    await cleanup();
+  }
+}
+
+/** An in-memory stand-in for Project (only what buildProjectIndex touches): fast for big or many projects. */
+function memoryProject(spec) {
+  const files = new Map();
+  const maps = spec.maps ?? { 1: {} };
+  files.set("System.json", { startMapId: 1, partyMembers: [1], switches: [""], variables: [""], ...(spec.system ?? {}) });
+  files.set("MapInfos.json", [null, ...Object.keys(maps).map(Number).sort((a, b) => a - b).map((id) => ({ id, name: `Map${id}` }))]);
+  for (const [id, value] of Object.entries(maps)) {
+    files.set(`Map${String(id).padStart(3, "0")}.json`, { width: 17, height: 13, encounterList: [], events: [null], ...value });
+  }
+  const tables = { commonEvents: "CommonEvents", troops: "Troops", enemies: "Enemies", items: "Items", skills: "Skills" };
+  for (const [key, name] of Object.entries(tables)) files.set(`${name}.json`, spec[key] ?? [null]);
+  return {
+    root: "memory",
+    exists: async () => false, // no js/plugins.js
+    dataFile: (name) => name,
+    mapFile: (id) => `Map${String(id).padStart(3, "0")}.json`,
+    readJson: async (name) => {
+      if (!files.has(name)) throw new Error(`missing ${name}`);
+      return files.get(name);
+    },
+  };
+}
+
+const sw = (id) => ({ switch1Valid: true, switch1Id: id });
+const transfer = (mapId) => c(201, 0, 0, mapId, 1, 1, 0, 0);
+const switchOn = (id, end = id) => c(121, 0, id, end, 0);
+const switchOff = (id) => c(121, 0, id, id, 1);
+const door = (id, to, conditions = {}) => event(id, [page([transfer(to), END], { conditions })]);
+const npc = (id, list) => event(id, [page([...list, END])]);
+const ce = (id, list, extra = {}) => ({ id, name: `CE${id}`, trigger: 0, switchId: 1, list: [...list, END], ...extra });
+const troop = (id, pages) => ({ id, name: `Troop${id}`, members: [], pages });
+const troopPage = (list, conditions = {}) => ({
+  conditions: { actorHp: 50, actorId: 1, actorValid: false, enemyHp: 50, enemyIndex: 0, enemyValid: false, switchId: 1, switchValid: false, turnA: 0, turnB: 0, turnEnding: false, turnValid: false, ...conditions },
+  list: [...list, END],
+  span: 0,
+});
+
+// ---- the door / switch basics ----
+
+test("a door gated by switch 5 opens when an NPC on the start map sets it", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, npc(1, [switchOn(5)]), door(2, 2, sw(5))] }, 2: {} } });
+  assert.equal(report.startMapId, 1);
+  assert.deepEqual(report.reachableMaps, [1, 2]);
+  assert.deepEqual(report.unreachableMaps, []);
+  assert.deepEqual(report.edges, [{ from: 1, to: 2 }]);
+  assert.deepEqual(report.deadPages, []);
+  assert.deepEqual(report.deadEndMaps, [2]);
+  assert.equal(report.uncertainty.confidence, "high");
+  assert.equal(report.truncated, false);
+});
+
+test("without the NPC (or when it only switches 5 OFF) map 2 is unreachable and the goal names switch 5", async () => {
+  for (const npcList of [[], [switchOff(5)]]) {
+    const { report } = await run(
+      { maps: { 1: { events: [null, npc(1, npcList), door(2, 2, sw(5))] }, 2: {} } },
+      { goal: { mapId: 2 } },
+    );
+    assert.deepEqual(report.reachableMaps, [1]);
+    assert.deepEqual(report.unreachableMaps, [2]);
+    assert.deepEqual(report.edges, []);
+    assert.deepEqual(report.deadPages, [
+      { kind: "map", mapId: 1, eventId: 2, page: 0, reason: "switch 5 is never switched ON by any reachable event" },
+    ]);
+    assert.deepEqual(report.goal, {
+      target: "map 2",
+      reachable: false,
+      blockedBy: ["Map001 event 2 page 1: switch 5 is never switched ON by any reachable event"],
+    });
+  }
+});
+
+test("a chain of three switches across maps; breaking the middle link cuts off the rest", async () => {
+  const chain = (withSecond) => ({
+    maps: {
+      1: { events: [null, npc(1, [switchOn(1)]), door(2, 2, sw(1))] },
+      2: { events: [null, npc(1, withSecond ? [switchOn(2)] : []), door(2, 3, sw(2))] },
+      3: { events: [null, npc(1, [switchOn(3)]), door(2, 4, sw(3))] },
+      4: {},
+    },
+  });
+  const ok = (await run(chain(true), { goal: { mapId: 4 } })).report;
+  assert.deepEqual(ok.reachableMaps, [1, 2, 3, 4]);
+  assert.deepEqual(ok.goal, { target: "map 4", reachable: true, blockedBy: [] });
+  assert.deepEqual(ok.edges, [{ from: 1, to: 2 }, { from: 2, to: 3 }, { from: 3, to: 4 }]);
+
+  const broken = (await run(chain(false), { goal: { mapId: 4 } })).report;
+  assert.deepEqual(broken.reachableMaps, [1, 2]);
+  assert.deepEqual(broken.unreachableMaps, [3, 4]);
+  assert.deepEqual(broken.goal.blockedBy, ["Map003 event 2 page 1: map 3 is unreachable"]);
+  // pages on unreachable maps are not listed as dead (the map itself is reported)
+  assert.deepEqual(broken.deadPages.map((p) => p.mapId), [2]);
+});
+
+test("an item gate opens through a chest (126 gain) or a shop (302) but not through nothing or a 126 loss", async () => {
+  const gate = (giver) => ({ maps: { 1: { events: [null, npc(1, giver), door(2, 2, { itemValid: true, itemId: 5 })] }, 2: {} } });
+  assert.deepEqual((await run(gate([c(126, 0, 5, 0, 0, 1)]))).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate([c(302, 0, 0, 5, 0, 0, false)]))).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate([c(605, 0, 1, 2, 0, 0), c(302, 0, 1, 3, 0, 0, false), c(605, 0, 0, 5, 0, 0)]))).report.reachableMaps, [1, 2]);
+  for (const nothing of [[], [c(126, 0, 5, 1, 0, 1)], [c(127, 0, 5, 0, 0, 1, false)]]) {
+    const { report } = await run(gate(nothing));
+    assert.deepEqual(report.reachableMaps, [1]);
+    assert.equal(report.deadPages[0].reason, "item 5 can never be obtained");
+  }
+});
+
+test("enemy drops make an item gainable even when no battle uses the enemy", async () => {
+  const { report } = await run({
+    maps: { 1: { events: [null, door(1, 2, { itemValid: true, itemId: 4 })] }, 2: {} },
+    enemies: [null, { id: 1, name: "Slime", actions: [], dropItems: [{ kind: 1, dataId: 4, denominator: 2 }, { kind: 0, dataId: 9, denominator: 1 }] }],
+  });
+  assert.deepEqual(report.reachableMaps, [1, 2]);
+});
+
+test("a variable gate >= 3 opens only when some reachable page writes the variable; >= 0 is always open", async () => {
+  const gate = (writer, value = 3) => ({
+    maps: { 1: { events: [null, npc(1, writer), door(2, 2, { variableValid: true, variableId: 2, variableValue: value })] }, 2: {} },
+  });
+  const closed = (await run(gate([]))).report;
+  assert.deepEqual(closed.reachableMaps, [1]);
+  assert.equal(closed.deadPages[0].reason, "variable 2 is never set by any reachable event, so it stays 0 (the page needs >= 3)");
+  assert.deepEqual((await run(gate([c(122, 0, 2, 2, 0, 0, 3)]))).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate([c(122, 0, 1, 4, 1, 0, 1)]))).report.reachableMaps, [1, 2], "range write");
+  assert.deepEqual((await run(gate([c(103, 0, 2, 1)]))).report.reachableMaps, [1, 2], "input number writes it");
+  assert.deepEqual((await run(gate([], 0))).report.reachableMaps, [1, 2], "0 >= 0 holds from the start");
+});
+
+test("self-switch chest: page 2 needs self switch A, set only by page 1 of the same event", async () => {
+  const chest = (pageOne, other = []) => ({
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([c(126, 0, 1, 0, 0, 1), ...pageOne, END]), page([transfer(2), END], { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } })]),
+          npc(2, other),
+        ],
+      },
+      2: {},
+    },
+  });
+  assert.deepEqual((await run(chest([c(123, 0, "A", 0)]))).report.reachableMaps, [1, 2]);
+  for (const [pageOne, other] of [[[], []], [[c(123, 0, "A", 1)], []], [[c(123, 0, "B", 0)], []], [[], [c(123, 0, "A", 0)]]]) {
+    const { report } = await run(chest(pageOne, other));
+    assert.deepEqual(report.reachableMaps, [1]);
+    assert.deepEqual(report.deadPages, [
+      { kind: "map", mapId: 1, eventId: 1, page: 1, reason: "self switch A of this event is never switched ON by a reachable page" },
+    ]);
+  }
+});
+
+test("an actor condition holds for starting party members and actors added by 129 (not removed ones)", async () => {
+  const gate = (list) => ({ maps: { 1: { events: [null, npc(1, list), door(2, 2, { actorValid: true, actorId: 3 })] }, 2: {} } });
+  assert.deepEqual((await run({ ...gate([]), system: { partyMembers: [1, 3] } })).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate([c(129, 0, 3, 0, false)]))).report.reachableMaps, [1, 2]);
+  const removed = (await run(gate([c(129, 0, 3, 1, false)]))).report;
+  assert.deepEqual(removed.reachableMaps, [1]);
+  assert.equal(removed.deadPages[0].reason, "actor 3 never joins the party");
+});
+
+// ---- common events ----
+
+test("a common event that sets a switch counts only when a reachable page calls it", async () => {
+  const spec = (callerMap) => ({
+    maps: { 1: { events: [null, npc(1, callerMap === 1 ? [c(117, 0, 1)] : [])] }, 2: { events: [null, npc(1, [c(117, 0, 1)])] } },
+    commonEvents: [null, ce(1, [switchOn(7)])],
+  });
+  const far = (await run(spec(2), { goal: { switch: 7 } })).report;
+  assert.deepEqual(far.goal, {
+    target: "switch 7",
+    reachable: false,
+    blockedBy: ["CommonEvent 1: common event 1 is never called by a reachable event"],
+  });
+  assert.deepEqual(far.deadPages, [{ kind: "commonEvent", eventId: 1, page: 0, reason: "common event 1 is never called by a reachable event" }]);
+  const near = (await run(spec(1), { goal: { switch: 7 } })).report;
+  assert.deepEqual(near.goal, { target: "switch 7", reachable: true, blockedBy: [] });
+  assert.deepEqual(near.deadPages, []);
+});
+
+test("a parallel common event gated by a switch runs once the switch can be ON; autorun without a switch always runs", async () => {
+  const spec = (setter) => ({
+    maps: { 1: { events: [null, npc(1, setter)] } },
+    commonEvents: [null, ce(1, [switchOn(4)], { trigger: 2, switchId: 3 }), ce(2, [switchOn(6)], { trigger: 1, switchId: 0 })],
+  });
+  const on = (await run(spec([switchOn(3)]), { goal: { switch: 4 } })).report;
+  assert.equal(on.goal.reachable, true);
+  assert.deepEqual(on.deadPages, []);
+  const off = (await run(spec([]), { goal: { switch: 4 } })).report;
+  assert.equal(off.goal.reachable, false);
+  assert.deepEqual(off.deadPages, [
+    {
+      kind: "commonEvent",
+      eventId: 1,
+      page: 0,
+      reason: "common event 1 is never called by a reachable event and its trigger switch 3 is never switched ON by any reachable event",
+    },
+  ]);
+  assert.equal((await run(spec([]), { goal: { switch: 6 } })).report.goal.reachable, true);
+});
+
+test("a common event's 123 sets the self switch of the map event that called it, also through nested calls", async () => {
+  const chest = (callList, ces) => ({
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([...callList, END]), page([transfer(2), END], { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } })]),
+          event(2, [page([END]), page([transfer(3), END], { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } })]),
+        ],
+      },
+      2: {},
+      3: {},
+    },
+    commonEvents: ces,
+  });
+  const direct = (await run(chest([c(117, 0, 1)], [null, ce(1, [c(123, 0, "A", 0)])]))).report;
+  assert.deepEqual(direct.reachableMaps, [1, 2], "event 1 gets A; event 2 (not a caller) does not");
+  const nested = (await run(chest([c(117, 0, 1)], [null, ce(1, [c(117, 0, 2)]), ce(2, [c(123, 0, "A", 0)])]))).report;
+  assert.deepEqual(nested.reachableMaps, [1, 2]);
+  const loop = (await run(chest([c(117, 0, 1)], [null, ce(1, [c(117, 0, 2)]), ce(2, [c(117, 0, 1), c(123, 0, "A", 0)])]))).report;
+  assert.deepEqual(loop.reachableMaps, [1, 2], "recursive calls terminate");
+  // an autorun common event has no calling map event, so its 123 sets nobody's self switch
+  const autorun = (await run(chest([], [null, ce(1, [c(123, 0, "A", 0)], { trigger: 1, switchId: 0 })]))).report;
+  assert.deepEqual(autorun.reachableMaps, [1]);
+});
+
+test("common events named by item effects run when the item is gainable; by skill effects always", async () => {
+  const spec = (giver) => ({
+    maps: { 1: { events: [null, npc(1, giver)] } },
+    commonEvents: [null, ce(1, [switchOn(8)]), ce(2, [switchOn(9)])],
+    items: [null, null, null, { id: 3, name: "Horn", effects: [{ code: 44, dataId: 1, value1: 0, value2: 0 }] }],
+    skills: [null, { id: 1, name: "Call", effects: [{ code: 44, dataId: 2, value1: 0, value2: 0 }] }],
+  });
+  assert.equal((await run(spec([c(126, 0, 3, 0, 0, 1)]), { goal: { switch: 8 } })).report.goal.reachable, true);
+  assert.equal((await run(spec([]), { goal: { switch: 8 } })).report.goal.reachable, false);
+  assert.equal((await run(spec([]), { goal: { switch: 9 } })).report.goal.reachable, true);
+});
+
+// ---- troops ----
+
+test("troop pages run when the troop is fought (reachable encounter or direct battle) and their switch condition holds", async () => {
+  const { report } = await run({
+    maps: {
+      1: { encounterList: [{ troopId: 1, regionSet: [], weight: 10 }], events: [null, npc(1, [c(301, 0, 0, 3, false, false)])] },
+      2: { encounterList: [{ troopId: 4, regionSet: [], weight: 10 }] },
+    },
+    troops: [
+      null,
+      troop(1, [troopPage([switchOn(6)], { turnEnding: true }), troopPage([switchOn(7)], { switchValid: true, switchId: 9 }), troopPage([])]),
+      troop(2, [troopPage([switchOn(8)], { turnEnding: true })]),
+      troop(3, [troopPage([transfer(2)], { turnValid: true, turnA: 1 })]),
+      troop(4, [troopPage([switchOn(10)], { turnEnding: true })]),
+    ],
+  });
+  assert.deepEqual(report.reachableMaps, [1, 2], "a 201 in a battle event page adds its target");
+  assert.deepEqual(report.edges, [], "but draws no edge");
+  assert.deepEqual(report.deadPages, [
+    { kind: "troop", eventId: 1, page: 1, reason: "switch 9 is never switched ON by any reachable event" },
+    {
+      kind: "troop",
+      eventId: 2,
+      page: 0,
+      reason: "troop 2 is never fought: no reachable map encounters it and no reachable event starts a battle with it",
+    },
+  ]);
+});
+
+test("a troop page's actor condition is not a party check (MV only tests the actor's HP), so it is not required", async () => {
+  const { report } = await run(
+    {
+      maps: { 1: { encounterList: [{ troopId: 1, regionSet: [], weight: 10 }] } },
+      troops: [null, troop(1, [troopPage([switchOn(2)], { actorValid: true, actorId: 7, actorHp: 100 })])],
+    },
+    { goal: { switch: 2 } },
+  );
+  assert.equal(report.goal.reachable, true);
+});
+
+// ---- map graph ----
+
+test("cyclic maps terminate and every distinct direct transfer is one edge", async () => {
+  const { report } = await run({
+    maps: {
+      1: { events: [null, door(1, 2), door(2, 2)] },
+      2: { events: [null, door(1, 1), door(2, 2)] },
+      3: { events: [null, door(1, 1)] },
+    },
+  });
+  assert.deepEqual(report.reachableMaps, [1, 2]);
+  assert.deepEqual(report.unreachableMaps, [3]);
+  assert.deepEqual(report.edges, [{ from: 1, to: 2 }, { from: 2, to: 1 }, { from: 2, to: 2 }]);
+  assert.deepEqual(report.deadEndMaps, []);
+});
+
+test("dead ends: maps left only through a common event or a variable transfer are not dead ends", async () => {
+  const { report } = await run({
+    maps: {
+      1: { events: [null, door(1, 2), door(2, 3), door(3, 4), door(4, 5)] },
+      2: {},
+      3: { events: [null, npc(1, [c(117, 0, 1)])] },
+      4: { events: [null, npc(1, [c(201, 0, 1, 1, 2, 3, 0, 0)])] },
+      5: { events: [null, npc(1, [c(202, 0, 1, 0, 1, 0, 0)])] },
+    },
+    commonEvents: [null, ce(1, [c(117, 0, 2)]), ce(2, [transfer(1)])],
+  });
+  assert.deepEqual(report.reachableMaps, [1, 2, 3, 4, 5]);
+  assert.deepEqual(report.deadEndMaps, [2, 5], "a 202 (vehicle location) is not a way out");
+});
+
+test("a 202 vehicle location does not make its map reachable", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, npc(1, [c(202, 0, 0, 0, 2, 3, 4)])] }, 2: {} } });
+  assert.deepEqual(report.reachableMaps, [1]);
+});
+
+test("switch writes: big 121 ranges reach high ids, move-route switch ON counts", async () => {
+  const gate = (list, id) => ({ maps: { 1: { events: [null, npc(1, list), door(2, 2, sw(id))] }, 2: {} } });
+  assert.deepEqual((await run(gate([switchOn(1, 100000)], 50000))).report.reachableMaps, [1, 2]);
+  const route = c(205, 0, -1, { list: [{ code: 27, parameters: [12] }, { code: 0 }], repeat: false, skippable: false, wait: true });
+  assert.deepEqual((await run(gate([route], 12))).report.reachableMaps, [1, 2]);
+});
+
+// ---- references, uncertainty, goals ----
+
+test("neverSet / neverRead come from every page, reachable or not", async () => {
+  const { report } = await run({
+    maps: {
+      1: { events: [null, npc(1, [c(111, 0, 0, 3, 0), c(0, 1), c(412, 0), switchOn(4), c(122, 0, 5, 5, 0, 0, 1)])] },
+      2: { events: [null, npc(1, [c(111, 0, 1, 6, 0, 2, 1), c(0, 1), c(412, 0), switchOn(7)]), door(2, 1, sw(7))] },
+    },
+  });
+  assert.deepEqual(report.switches, { neverSet: [3], neverRead: [4] });
+  assert.deepEqual(report.variables, { neverSet: [6], neverRead: [5] });
+});
+
+test("confidence is low when the project has script, plugin or variable-designated commands (counted over all pages)", async () => {
+  const clean = (await run({ maps: { 1: { events: [null, npc(1, [switchOn(1)])] } } })).report;
+  assert.deepEqual(clean.uncertainty, { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, confidence: "high" });
+  const cases = [
+    [c(355, 0, "$gameSwitches.setValue(5, true)"), "scriptCommands"],
+    [c(356, 0, "OpenDoor 5"), "pluginCommands"],
+    [c(201, 0, 1, 1, 2, 3, 0, 0), "variableTransfers"],
+    [c(301, 0, 1, 4, false, false), "variableBattles"],
+  ];
+  for (const [command, field] of cases) {
+    for (const where of [1, 2]) {
+      const maps = { 1: { events: [null, npc(1, where === 1 ? [command] : [])] }, 2: { events: [null, npc(1, where === 2 ? [command] : [])] } };
+      const { report } = await run({ maps });
+      assert.equal(report.uncertainty[field], 1);
+      assert.equal(report.uncertainty.confidence, "low", `${field} on map ${where}`);
+      assert.ok(report.notes.some((n) => n.includes("counted over all pages")), report.notes.join("\n"));
+    }
+  }
+});
+
+test("a reachable map that cannot be read makes the confidence low and is noted", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, door(1, 2)] }, 2: null } });
+  assert.deepEqual(report.reachableMaps, [1, 2]);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("map 2") && n.includes("could not be read")), report.notes.join("\n"));
+  const unreachable = (await run({ maps: { 1: {}, 2: null } })).report;
+  assert.equal(unreachable.uncertainty.confidence, "high");
+});
+
+test("goal event: reachable when some page can trigger, else the reasons", async () => {
+  const spec = {
+    maps: {
+      1: { events: [null, event(1, [page([END], { conditions: sw(2) }), page([END], { conditions: { itemValid: true, itemId: 3 } })]), npc(2, [])] },
+      2: { events: [null, npc(1, [])] },
+    },
+  };
+  assert.deepEqual((await run(spec, { goal: { event: { mapId: 1, eventId: 2 } } })).report.goal, { target: "map 1 event 2", reachable: true, blockedBy: [] });
+  assert.deepEqual((await run(spec, { goal: { event: { mapId: 1, eventId: 1 } } })).report.goal, {
+    target: "map 1 event 1",
+    reachable: false,
+    blockedBy: ["page 1: switch 2 is never switched ON by any reachable event", "page 2: item 3 can never be obtained"],
+  });
+  assert.deepEqual((await run(spec, { goal: { event: { mapId: 2, eventId: 1 } } })).report.goal, {
+    target: "map 2 event 1",
+    reachable: false,
+    blockedBy: ["map 2 is unreachable", "no event transfers to map 2"],
+  });
+  assert.deepEqual((await run(spec, { goal: { event: { mapId: 1, eventId: 9 } } })).report.goal, {
+    target: "map 1 event 9",
+    reachable: false,
+    blockedBy: ["map 1 has no event 9"],
+  });
+});
+
+test("goal switch with no setter at all, and blockedBy capped at 10", async () => {
+  assert.deepEqual((await run({}, { goal: { switch: 3 } })).report.goal, { target: "switch 3", reachable: false, blockedBy: ["no event ever sets switch 3"] });
+  const setters = Array.from({ length: 12 }, (_, i) => event(i + 1, [page([switchOn(3), END], { conditions: sw(4) })]));
+  const { report } = await run({ maps: { 1: { events: [null, ...setters] } } }, { goal: { switch: 3 } });
+  assert.equal(report.goal.blockedBy.length, 10);
+  assert.equal(report.goal.blockedBy[0], "Map001 event 1 page 1: switch 4 is never switched ON by any reachable event");
+});
+
+test("lists are sorted and capped at limit with truncated set", async () => {
+  const maps = { 1: {} };
+  for (let id = 2; id <= 6; id++) maps[id] = {};
+  const { index, report } = await run({ maps }, { limit: 2 });
+  assert.deepEqual(report.unreachableMaps, [2, 3]);
+  assert.equal(report.truncated, true);
+  assert.equal(analyzeProgression(index, { limit: 10 }).truncated, false);
+});
+
+test("pure and idempotent: two calls give equal reports and the index is not changed", async () => {
+  const { index } = await run({
+    maps: { 1: { events: [null, npc(1, [switchOn(5), c(117, 0, 1)]), door(2, 2, sw(5))] }, 2: { events: [null, door(1, 1)] } },
+    commonEvents: [null, ce(1, [c(123, 0, "A", 0)])],
+  });
+  const before = JSON.stringify(index);
+  const a = analyzeProgression(index, { limit: 100, goal: { mapId: 2 } });
+  const b = analyzeProgression(index, { limit: 100, goal: { mapId: 2 } });
+  assert.deepEqual(a, b);
+  assert.equal(JSON.stringify(index), before);
+});
+
+// ---- size ----
+
+test("a 200-map chain of switch-gated doors is analysed in under 2 s", async () => {
+  const maps = {};
+  for (let id = 1; id <= 200; id++) {
+    maps[id] = { events: [null, npc(1, [switchOn(id)]), door(2, id < 200 ? id + 1 : 1, sw(id))] };
+  }
+  const index = await buildProjectIndex(memoryProject({ maps }));
+  const t0 = performance.now();
+  const report = analyzeProgression(index, { limit: 500, goal: { mapId: 200 } });
+  const ms = performance.now() - t0;
+  assert.equal(report.reachableMaps.length, 200);
+  assert.equal(report.goal.reachable, true);
+  assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
+});
+
+test("the fixpoint is bounded: a dependency chain longer than 10 000 steps stops, says so and lowers confidence", async () => {
+  const maps = {};
+  const n = 10_005;
+  for (let id = 1; id <= n; id++) maps[id] = { events: [null, ...(id < n ? [door(1, id + 1)] : [])] };
+  const index = await buildProjectIndex(memoryProject({ maps }));
+  const report = analyzeProgression(index, { limit: 10 });
+  assert.equal(report.truncated, true);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("10000")), report.notes.join("\n"));
+});
+
+// ---- randomized differential test against an independent brute-force explorer ----
+
+/**
+ * Random small project in fixture-spec form. The "heavy" profile has few maps and several common events, map pages
+ * that mostly call them and many self-switch conditions, so nested calls whose 123 sets the caller's self switch occur.
+ */
+function randomSpec(rng, heavy) {
+  const int = (lo, hi) => lo + Math.floor(rng() * (hi - lo + 1));
+  const chance = (p) => rng() < p;
+  const nMaps = heavy ? int(1, 2) : int(1, 6);
+  const nCE = heavy ? int(2, 4) : int(0, 3);
+  const nTroops = int(0, 2);
+  const command = () => {
+    switch (int(0, 11)) {
+      case 0:
+      case 1: {
+        const a = int(1, 8);
+        return c(121, 0, a, Math.min(8, a + int(0, 2)), chance(0.8) ? 0 : 1);
+      }
+      case 2:
+        return c(122, 0, int(1, 4), int(1, 4), 0, 0, int(0, 5));
+      case 3:
+        return c(123, 0, chance(0.7) ? "A" : "B", chance(0.8) ? 0 : 1);
+      case 4:
+        return c(126, 0, int(1, 4), chance(0.8) ? 0 : 1, 0, 1);
+      case 5:
+        return c(302, 0, 0, int(1, 4), 0, 0, false);
+      case 6:
+      case 7:
+        return transfer(int(1, nMaps));
+      case 8:
+        return nCE > 0 ? c(117, 0, int(1, nCE)) : c(101, 0, "", 0, 0, 2);
+      case 9:
+        return c(129, 0, int(1, 3), chance(0.7) ? 0 : 1, false);
+      case 10:
+        return nTroops > 0 ? c(301, 0, 0, int(1, nTroops), false, false) : c(230, 0, 1);
+      default:
+        return c(205, 0, -1, { list: [{ code: chance(0.5) ? 27 : 28, parameters: [int(1, 8)] }, { code: 0 }], repeat: false, skippable: false, wait: true });
+    }
+  };
+  const mapCommand = () => (heavy && chance(0.4) ? c(117, 0, int(1, nCE)) : command());
+  const commands = (max) => Array.from({ length: int(0, max) }, command);
+  // Common event bodies lean on 123 and 117 so the caller-context path (a called 123 sets the caller's self switch) is hit.
+  const ceCommand = () => (chance(0.3) ? c(123, 0, chance(0.7) ? "A" : "B", chance(0.8) ? 0 : 1) : chance(0.3) ? c(117, 0, int(1, nCE)) : command());
+  const ceCommands = (max) => Array.from({ length: int(0, max) }, ceCommand);
+  const conditions = () => {
+    const out = {};
+    if (chance(0.3)) Object.assign(out, { switch1Valid: true, switch1Id: int(1, 8) });
+    if (chance(0.1)) Object.assign(out, { switch2Valid: true, switch2Id: int(1, 8) });
+    if (chance(0.2)) Object.assign(out, { variableValid: true, variableId: int(1, 4), variableValue: int(0, 3) });
+    if (chance(heavy ? 0.5 : 0.3)) Object.assign(out, { selfSwitchValid: true, selfSwitchCh: chance(0.7) ? "A" : "B" });
+    if (chance(0.15)) Object.assign(out, { itemValid: true, itemId: int(1, 4) });
+    if (chance(0.1)) Object.assign(out, { actorValid: true, actorId: int(1, 3) });
+    return out;
+  };
+  const maps = {};
+  for (let m = 1; m <= nMaps; m++) {
+    const events = [null];
+    for (let e = 1, n = int(0, 4); e <= n; e++) {
+      const pageSpec = () => {
+        const extra = { conditions: conditions() };
+        if (chance(0.15)) {
+          // an autonomous move route (moveType 3) or a custom route that is not autonomous (moveType 0)
+          extra.moveType = chance(0.7) ? 3 : 0;
+          extra.moveRoute = { list: [{ code: chance(0.6) ? 27 : 28, parameters: [int(1, 8)] }, { code: 0, parameters: [] }], repeat: true, skippable: false, wait: false };
+        }
+        return page([...Array.from({ length: int(0, 3) }, mapCommand), END], extra);
+      };
+      events.push(event(e, Array.from({ length: int(1, 3) }, pageSpec)));
+    }
+    const encounterList = nTroops > 0 && chance(0.3) ? [{ troopId: int(1, nTroops), regionSet: [], weight: 5 }] : [];
+    maps[m] = { events, encounterList };
+  }
+  const commonEvents = [null];
+  for (let id = 1; id <= nCE; id++) commonEvents.push(ce(id, ceCommands(3), { trigger: int(0, 2), switchId: int(0, 8) }));
+  const troops = [null];
+  for (let id = 1; id <= nTroops; id++) {
+    troops.push(
+      troop(
+        id,
+        Array.from({ length: int(1, 2) }, () => troopPage(commands(2), chance(0.4) ? { switchValid: true, switchId: int(1, 8) } : { turnEnding: true })),
+      ),
+    );
+  }
+  const enemies = [null, { id: 1, name: "E", actions: [], dropItems: chance(0.5) ? [{ kind: 1, dataId: int(1, 4), denominator: 1 }] : [] }];
+  const items = [null];
+  for (let id = 1; id <= 4; id++) items.push({ id, name: `I${id}`, effects: nCE > 0 && chance(0.2) ? [{ code: 44, dataId: int(1, nCE) }] : [] });
+  const skills = [null, { id: 1, name: "S", effects: nCE > 0 && chance(0.2) ? [{ code: 44, dataId: int(1, nCE) }] : [] }];
+  return { system: { startMapId: int(1, nMaps), partyMembers: chance(0.5) ? [1] : [1, 2] }, maps, commonEvents, troops, enemies, items, skills };
+}
+
+/**
+ * Independent brute force over the same abstraction, working on the raw spec (not the index): fire every
+ * triggerable page (in a shuffled order each round, running called common events inline with the caller's
+ * event as context) until a full round changes nothing.
+ */
+function explore(spec, rng) {
+  const st = { R: new Set([spec.system.startMapId]), S: new Set(), W: new Set(), G: new Set(), A: new Set(spec.system.partyMembers), F: new Set(), C: new Set(), T: new Set() };
+  const edges = new Set();
+  const size = () => Object.values(st).reduce((n, s) => n + s.size, 0) + edges.size;
+  for (const e of spec.enemies) for (const d of e?.dropItems ?? []) if (d.kind === 1) st.G.add(d.dataId);
+  for (const s of spec.skills) for (const ef of s?.effects ?? []) if (ef.code === 44) st.C.add(ef.dataId);
+  const pages = [];
+  for (const [m, map] of Object.entries(spec.maps)) {
+    for (const ev of map.events) if (ev) ev.pages.forEach((pg, i) => pages.push({ kind: "map", mapId: Number(m), eventId: ev.id, page: i, raw: pg }));
+  }
+  for (const e of spec.commonEvents) if (e) pages.push({ kind: "commonEvent", eventId: e.id, page: 0, raw: e });
+  for (const t of spec.troops) if (t) t.pages.forEach((pg, i) => pages.push({ kind: "troop", eventId: t.id, page: i, raw: pg }));
+
+  const triggerable = (p) => {
+    if (p.kind === "map") {
+      const k = p.raw.conditions;
+      return (
+        st.R.has(p.mapId) &&
+        (!k.switch1Valid || st.S.has(k.switch1Id)) &&
+        (!k.switch2Valid || st.S.has(k.switch2Id)) &&
+        (!k.variableValid || st.W.has(k.variableId) || 0 >= k.variableValue) &&
+        (!k.selfSwitchValid || st.F.has(`${p.mapId}:${p.eventId}:${k.selfSwitchCh}`)) &&
+        (!k.itemValid || st.G.has(k.itemId)) &&
+        (!k.actorValid || st.A.has(k.actorId))
+      );
+    }
+    if (p.kind === "commonEvent") {
+      const e = p.raw;
+      return st.C.has(e.eventId ?? e.id) || ((e.trigger === 1 || e.trigger === 2) && (e.switchId < 1 || st.S.has(e.switchId)));
+    }
+    return st.T.has(p.eventId) && (!p.raw.conditions.switchValid || st.S.has(p.raw.conditions.switchId));
+  };
+  const runList = (list, ctx, own, mapId, active) => {
+    for (const cmd of list) {
+      const q = cmd.parameters;
+      switch (cmd.code) {
+        case 121:
+          if (q[2] === 0) for (let i = q[0]; i <= q[1]; i++) st.S.add(i);
+          break;
+        case 122:
+          for (let i = q[0]; i <= q[1]; i++) st.W.add(i);
+          break;
+        case 123:
+          if (q[1] === 0 && ctx) st.F.add(`${ctx}:${q[0]}`);
+          break;
+        case 126:
+          if (q[1] === 0) st.G.add(q[0]);
+          break;
+        case 302:
+          if (q[0] === 0) st.G.add(q[1]);
+          break;
+        case 129:
+          if (q[1] === 0) st.A.add(q[0]);
+          break;
+        case 117: {
+          st.C.add(q[0]);
+          const key = `${q[0]}@${ctx}`;
+          const callee = spec.commonEvents[q[0]];
+          if (callee && !active.has(key)) {
+            active.add(key);
+            runList(callee.list, ctx, false, mapId, active);
+          }
+          break;
+        }
+        case 201:
+          st.R.add(q[1]);
+          if (own) edges.add(`${mapId}>${q[1]}`);
+          break;
+        case 301:
+          st.T.add(q[1]);
+          break;
+        case 205:
+          for (const r of q[1].list) if (r.code === 27) st.S.add(r.parameters[0]);
+          break;
+      }
+    }
+  };
+  const fired = new Set();
+  for (;;) {
+    const before = size();
+    for (const m of st.R) for (const enc of spec.maps[m]?.encounterList ?? []) st.T.add(enc.troopId);
+    for (const id of st.G) for (const ef of spec.items[id]?.effects ?? []) if (ef.code === 44) st.C.add(ef.dataId);
+    const order = pages.map((p, i) => [rng(), i]).sort((x, y) => x[0] - y[0]).map(([, i]) => pages[i]);
+    for (const p of order) {
+      if (!triggerable(p)) continue;
+      fired.add(p);
+      const ctx = p.kind === "map" ? `${p.mapId}:${p.eventId}` : null;
+      runList(p.raw.list, ctx, p.kind === "map", p.mapId, new Set());
+      // an autonomous move route runs while its page is active
+      if (p.kind === "map" && p.raw.moveType === 3) for (const r of p.raw.moveRoute.list) if (r.code === 27) st.S.add(r.parameters[0]);
+    }
+    if (size() === before) break;
+  }
+  return { st, edges, fired, pages };
+}
+
+const pageKey = (p) => `${p.kind}:${p.mapId ?? "-"}:${p.eventId}:${p.page}`;
+
+test("randomized differential: analyzeProgression equals a brute-force explorer on 250 seeded projects", async () => {
+  const t0 = performance.now();
+  for (let seed = 1; seed <= 250; seed++) {
+    const rng = mulberry32(seed);
+    const spec = randomSpec(rng, seed % 2 === 0);
+    const index = await buildProjectIndex(memoryProject(spec));
+    const report = analyzeProgression(index, { limit: 10_000 });
+    const truth = explore(spec, mulberry32(seed * 7919));
+    const msg = `seed ${seed}`;
+    const mapIds = Object.keys(spec.maps).map(Number);
+
+    assert.deepEqual(report.reachableMaps, [...truth.st.R].filter((m) => mapIds.includes(m)).sort((a, b) => a - b), msg);
+    assert.deepEqual(report.unreachableMaps, mapIds.filter((m) => !truth.st.R.has(m)), msg);
+    assert.deepEqual(
+      report.edges.map((e) => `${e.from}>${e.to}`).sort(),
+      [...truth.edges].sort(),
+      msg,
+    );
+    const isEmpty = (p) => p.raw.list.every((cmd) => cmd.code === 0);
+    const expectedDead = truth.pages
+      .filter((p) => !truth.fired.has(p))
+      .filter((p) => (p.kind === "map" ? truth.st.R.has(p.mapId) : !isEmpty(p)))
+      .map(pageKey)
+      .sort();
+    assert.deepEqual(report.deadPages.map(pageKey).sort(), expectedDead, msg);
+    for (let s = 1; s <= 8; s++) {
+      assert.equal(analyzeProgression(index, { limit: 10, goal: { switch: s } }).goal.reachable, truth.st.S.has(s), `${msg} switch ${s}`);
+    }
+    for (const p of truth.pages.filter((q) => q.kind === "map" && q.page === 0)) {
+      const goal = analyzeProgression(index, { limit: 10, goal: { event: { mapId: p.mapId, eventId: p.eventId } } }).goal;
+      const any = truth.pages.some((q) => q.kind === "map" && q.mapId === p.mapId && q.eventId === p.eventId && truth.fired.has(q));
+      assert.equal(goal.reachable, any, `${msg} event ${p.mapId}/${p.eventId}`);
+    }
+  }
+  const ms = performance.now() - t0;
+  assert.ok(ms < 15000, `differential test took ${ms.toFixed(0)} ms`);
+});
+
+// ---- fix round 1 ----
+
+const autoRoute = (...entries) => ({
+  moveType: 3,
+  moveRoute: { list: [...entries.map(([code, parameters]) => ({ code, parameters })), { code: 0, parameters: [] }], repeat: true, skippable: false, wait: false },
+});
+
+test("an autonomous move route (moveType 3) with route code 27 sets its switch when the page can run; 28 and moveType 0 do not", async () => {
+  const gate = (extra, conditions = {}) => ({
+    maps: { 1: { events: [null, event(1, [page([END], { ...extra, conditions })]), door(2, 2, sw(5))] }, 2: {} },
+  });
+  const on = (await run(gate(autoRoute([27, [5]])), { goal: { switch: 5 } })).report;
+  assert.deepEqual(on.reachableMaps, [1, 2]);
+  assert.equal(on.goal.reachable, true);
+  assert.deepEqual(on.switches.neverSet, []);
+  assert.equal(on.uncertainty.confidence, "high");
+  for (const extra of [autoRoute([28, [5]]), { ...autoRoute([27, [5]]), moveType: 0 }]) {
+    const { report } = await run(gate(extra), { goal: { switch: 5 } });
+    assert.deepEqual(report.reachableMaps, [1]);
+    assert.equal(report.goal.reachable, false);
+  }
+  // the route only runs while its page is the one that can be active
+  const gated = (await run(gate(autoRoute([27, [5]]), sw(6)))).report;
+  assert.deepEqual(gated.reachableMaps, [1]);
+});
+
+test("a script in an autonomous move route is counted and lowers the confidence", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, event(1, [page([END], autoRoute([45, ["$gameSwitches.setValue(5, true)"]]))])] } } });
+  assert.equal(report.uncertainty.scriptCommands, 1);
+  assert.equal(report.uncertainty.confidence, "low");
+});
+
+test("a 205 move route turns a switch ON only with route code 27 (28 is switch OFF)", async () => {
+  const gate = (code) => ({
+    maps: {
+      1: {
+        events: [
+          null,
+          npc(1, [c(205, 0, -1, { list: [{ code, parameters: [12] }, { code: 0 }], repeat: false, skippable: false, wait: true })]),
+          door(2, 2, sw(12)),
+        ],
+      },
+      2: {},
+    },
+  });
+  assert.deepEqual((await run(gate(27))).report.reachableMaps, [1, 2]);
+  assert.deepEqual((await run(gate(28))).report.reachableMaps, [1]);
+});
+
+test("enabled plugins make the confidence low and are named in a note", async () => {
+  const { index } = await run({});
+  assert.equal(analyzeProgression(index, { limit: 10 }).uncertainty.confidence, "high");
+  const withPlugins = { ...index, hidden: { ...index.hidden, enabledPlugins: 2, enabledPluginNames: ["YEP_Core", "MyQuest"] } };
+  const report = analyzeProgression(withPlugins, { limit: 10 });
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(
+    report.notes.includes(
+      "2 enabled plugin(s) (YEP_Core, MyQuest) can call common events, set switches or move the player through parameters or notetags that this analysis cannot see.",
+    ),
+    report.notes.join("\n"),
+  );
+});
+
+test("dead ends: a transferring common event that runs by itself or from an item means no map is a dead end", async () => {
+  const base = (commonEvents, extra = {}) => ({
+    maps: { 1: { events: [null, door(1, 2), npc(2, [c(126, 0, 3, 0, 0, 1), c(117, 0, 1)])] }, 2: {} },
+    commonEvents,
+    ...extra,
+  });
+  assert.deepEqual((await run(base([null]))).report.deadEndMaps, [2], "control: map 2 is a dead end");
+  const parallel = (await run(base([null, ce(1, [transfer(1)], { trigger: 2, switchId: 0 })]))).report;
+  assert.deepEqual(parallel.deadEndMaps, []);
+  assert.ok(parallel.notes.some((n) => n.startsWith("common event 1 can transfer the player from any map")), parallel.notes.join("\n"));
+  const item = (
+    await run(base([null, ce(1, [transfer(1)])], { items: [null, null, null, { id: 3, name: "Wing", effects: [{ code: 44, dataId: 1 }] }] }))
+  ).report;
+  assert.deepEqual(item.deadEndMaps, []);
+  // a transferring common event that is only called from map 1 does not help map 2
+  const called = (await run(base([null, ce(1, [transfer(1)])]))).report;
+  assert.deepEqual(called.deadEndMaps, [2]);
+});
+
+test("a start map missing from MapInfos.json makes the confidence low with a note", async () => {
+  const { report } = await run({ system: { startMapId: 5 }, maps: { 1: {} } });
+  assert.deepEqual(report.reachableMaps, []);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("start map 5") && n.includes("not listed in MapInfos.json")), report.notes.join("\n"));
+});
+
+test("a direct transfer to a map missing from MapInfos.json is noted and makes the confidence low", async () => {
+  const { report } = await run({ maps: { 1: { events: [null, door(1, 9)] } } });
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(
+    report.notes.some((n) => n.includes("not listed in MapInfos.json: map 9") && n.includes("may be wrong")),
+    report.notes.join("\n"),
+  );
+  // the same transfer on a page that can never run changes nothing
+  const dead = (await run({ maps: { 1: { events: [null, door(1, 9, sw(3))] } } })).report;
+  assert.equal(dead.uncertainty.confidence, "high");
+});
+
+/** 200 maps x 25 events that all call common event 1, which starts a call chain 1 -> 2 -> ... -> 1000. */
+function contextBomb() {
+  const maps = {};
+  for (let m = 1; m <= 200; m++) {
+    maps[m] = { events: [null, ...Array.from({ length: 25 }, (_, i) => npc(i + 1, [c(117, 0, 1), ...(i === 0 && m < 200 ? [transfer(m + 1)] : [])]))] };
+  }
+  const commonEvents = [null];
+  for (let id = 1; id <= 1000; id++) commonEvents.push(ce(id, id < 1000 ? [c(117, 0, id + 1)] : [c(123, 0, "A", 0)]));
+  return { maps, commonEvents };
+}
+
+test("call contexts are capped: a context explosion stops quickly, says so and lowers confidence", async () => {
+  const index = await buildProjectIndex(memoryProject(contextBomb()));
+  const t0 = performance.now();
+  const report = analyzeProgression(index, { limit: 10 });
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
+  assert.equal(report.truncated, true);
+  assert.equal(report.uncertainty.confidence, "low");
+  assert.ok(report.notes.some((n) => n.includes("call contexts")), report.notes.join("\n"));
+});
+
+test("after the context cap, self switches set by called common events are still over-approximated (no false dead page)", async () => {
+  const spec = {
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([c(117, 0, 1), END]), page([transfer(2), END], { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } })]),
+        ],
+      },
+      2: {},
+    },
+    commonEvents: [null, ce(1, [c(117, 0, 2)]), ce(2, [c(117, 0, 3)]), ce(3, [c(123, 0, "A", 0)])],
+  };
+  const index = await buildProjectIndex(memoryProject(spec));
+  assert.equal(analyzeProgression(index, { limit: 10 }).truncated, false);
+  const capped = analyzeProgression(index, { limit: 10, maxContexts: 1 });
+  assert.equal(capped.truncated, true);
+  assert.equal(capped.uncertainty.confidence, "low");
+  assert.deepEqual(capped.reachableMaps, [1, 2]);
+});
+
+test("after the context cap, a calling page that only becomes able to run later still gets the coarse self switches", async () => {
+  const selfA = { conditions: { selfSwitchValid: true, selfSwitchCh: "A" } };
+  const spec = {
+    maps: {
+      1: {
+        events: [
+          null,
+          event(1, [page([c(117, 0, 1), END]), page([transfer(2), END], selfA)]),
+          event(2, [page([c(117, 0, 2), END], { conditions: sw(9) }), page([transfer(3), END], selfA)]),
+          npc(3, [switchOn(9)]),
+        ],
+      },
+      2: {},
+      3: {},
+    },
+    commonEvents: [null, ce(1, [c(117, 0, 2)]), ce(2, [c(123, 0, "A", 0)])],
+  };
+  const index = await buildProjectIndex(memoryProject(spec));
+  assert.deepEqual(analyzeProgression(index, { limit: 10 }).reachableMaps, [1, 2, 3]);
+  const capped = analyzeProgression(index, { limit: 10, maxContexts: 1 });
+  assert.equal(capped.truncated, true);
+  assert.deepEqual(capped.reachableMaps, [1, 2, 3]);
+});
+
+// ---- progressionGraph ----
+
+const baseReport = (extra = {}) => ({
+  startMapId: 1,
+  reachableMaps: [1, 2],
+  unreachableMaps: [],
+  deadEndMaps: [],
+  deadPages: [],
+  switches: { neverSet: [], neverRead: [] },
+  variables: { neverSet: [], neverRead: [] },
+  uncertainty: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, confidence: "high" },
+  edges: [{ from: 1, to: 2 }],
+  notes: [],
+  truncated: false,
+  ...extra,
+});
+
+test("progressionGraph: flowchart LR with a node per reachable map and an edge per transfer", () => {
+  const graph = progressionGraph(baseReport(), new Map([[1, "Town"], [2, "Cave"]]));
+  assert.deepEqual(graph.split("\n"), ["flowchart LR", '  m1["1: Town"]', '  m2["2: Cave"]', "  m1 --> m2"]);
+});
+
+test("progressionGraph: unreachable maps are only listed in a comment, never drawn", () => {
+  const graph = progressionGraph(baseReport({ reachableMaps: [1], unreachableMaps: [4, 7], edges: [] }), new Map([[4, "Secret"]]));
+  assert.ok(graph.includes("%% unreachable: 4, 7"), graph);
+  assert.ok(!/m4|m7|Secret/.test(graph), graph);
+  assert.ok(!progressionGraph(baseReport({ unreachableMaps: [] }), new Map()).includes("%% unreachable"));
+});
+
+test("progressionGraph: labels are sanitised (quotes, brackets, backticks, newlines, < > ; %%) and cut to 40 characters", () => {
+  const hostile = 'Evil"]\n  m9["x`<b>y</b>;%% end [a] (b) {c} \\ # & |\r\n';
+  const graph = progressionGraph(baseReport(), new Map([[1, hostile], [2, "A".repeat(100)]]));
+  const lines = graph.split("\n");
+  assert.equal(lines.length, 4, graph);
+  for (const line of lines.slice(1, 3)) {
+    const m = /^ {2}m(\d+)\["([^"]*)"\]$/.exec(line);
+    assert.ok(m, line);
+    assert.ok(m[2].length <= 40, line);
+    assert.ok(!/["'`<>;%[\](){}\\|#&\r\n]/.test(m[2]), line);
+  }
+  assert.ok(lines[1].startsWith('  m1["1: Evil'), lines[1]);
+  assert.equal(/^ {2}m2\["(.*)"\]$/.exec(lines[2])[1], `2: ${"A".repeat(37)}`);
+  assert.ok(!graph.includes("%%"), "no comment can be injected through a name");
+});
+
+test("progressionGraph: a missing name leaves just the id; unlisted transfer targets still get a node", () => {
+  const graph = progressionGraph(baseReport({ reachableMaps: [1], edges: [{ from: 1, to: 9 }] }), new Map());
+  assert.deepEqual(graph.split("\n"), ["flowchart LR", '  m1["1"]', '  m9["9"]', "  m1 --> m9"]);
+});
+
+test("progressionGraph: at most 200 distinct edges, then an omitted-count comment", () => {
+  const maps = Array.from({ length: 251 }, (_, i) => i + 1);
+  const edges = maps.slice(1).map((to) => ({ from: 1, to }));
+  const graph = progressionGraph(baseReport({ reachableMaps: maps, edges: [...edges, ...edges.slice(0, 5)] }), new Map());
+  const lines = graph.split("\n");
+  assert.equal(lines.filter((l) => l.includes("-->")).length, 200);
+  assert.ok(lines.includes("%% 50 more edges omitted"), graph.slice(-200));
+  const exact = progressionGraph(baseReport({ reachableMaps: maps, edges: edges.slice(0, 200) }), new Map());
+  assert.ok(!exact.includes("more edges omitted"));
+});
+
+test("progressionGraph: says so when the report was truncated", () => {
+  assert.ok(progressionGraph(baseReport({ truncated: true }), new Map()).includes("%% the report was truncated, so this graph may be incomplete"));
+  assert.ok(!progressionGraph(baseReport(), new Map()).includes("truncated"));
+});
+
+// ---- the analyze_progression tool ----
+
+const CAVEAT_PART = "This is an over-approximation: it ignores conditions inside event commands and anything done by scripts or plugins";
+
+async function withServer(spec, fn, { setProject = true } = {}) {
+  const fx = await createFixtureProject(spec);
+  const client = new Client({ name: "progression-test", version: "0.0.0" });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [entry], stderr: "ignore" }));
+  const call = async (name, args) => {
+    let res;
+    try {
+      res = await client.callTool({ name, arguments: args });
+    } catch (err) {
+      return { isError: true, text: String(err?.message ?? err), json: null };
+    }
+    const text = res.content?.[0]?.text ?? "";
+    return { isError: !!res.isError, text, json: !res.isError && /^[{[]/.test(text) ? JSON.parse(text) : null };
+  };
+  try {
+    if (setProject) assert.equal((await call("set_project", { path: fx.root })).isError, false);
+    return await fn({ call, fx, client });
+  } finally {
+    await client.close();
+    await fx.cleanup();
+  }
+}
+
+/** Start map 1 with an NPC that sets switch 5 and a door to map 2 gated by it (without the NPC the door is event 1). */
+const gated = (withNpc = true) => ({
+  maps: { 1: { events: [null, ...(withNpc ? [npc(1, [switchOn(5)])] : []), door(withNpc ? 2 : 1, 2, sw(5))] }, 2: {} },
+  mapInfos: [null, { id: 1, name: "Town" }, { id: 2, name: "Cave" }],
+});
+
+test("analyze_progression: no project selected", async () => {
+  await withServer({}, async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, true);
+    assert.match(r.text, /No project selected/);
+  }, { setProject: false });
+});
+
+test("analyze_progression: report fields, names, summary and the caveat; no graph by default", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    const j = r.json;
+    assert.equal(j.startMapId, 1);
+    assert.deepEqual(j.reachableMaps, [1, 2]);
+    assert.deepEqual(j.unreachableMaps, []);
+    for (const key of ["deadEndMaps", "deadPages", "switches", "variables", "uncertainty", "edges", "notes", "truncated", "names", "summary"]) {
+      assert.ok(key in j, `missing ${key}`);
+    }
+    assert.deepEqual(j.edges, [{ from: 1, to: 2 }]);
+    assert.deepEqual(j.names, { 1: "Town", 2: "Cave" });
+    assert.equal("graph" in j, false);
+    assert.equal("goal" in j, false);
+    assert.ok(j.summary.length >= 3 && j.summary.length <= 8, j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => l.includes(CAVEAT_PART)), j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => /plugin/i.test(l) && /notetag/i.test(l) && l.includes(CAVEAT_PART)), "the caveat names plugins and notetags");
+    assert.ok(j.summary.some((l) => /2 maps? .*reachable/i.test(l)), j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => /confidence is high/i.test(l)), j.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: includeGraph returns a Mermaid flowchart with the expected edge", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const r = await call("analyze_progression", { includeGraph: true });
+    assert.equal(r.isError, false, r.text);
+    assert.ok(r.json.graph.startsWith("flowchart LR"), r.json.graph);
+    assert.ok(r.json.graph.includes('m1["1: Town"]'));
+    assert.ok(r.json.graph.includes("m1 --> m2"));
+  });
+});
+
+test("analyze_progression: unreachable maps and an unmet map goal, with blockedBy in the summary", async () => {
+  await withServer(gated(false), async ({ call }) => {
+    const r = await call("analyze_progression", { goal: { mapId: 2 }, includeGraph: true });
+    assert.equal(r.isError, false, r.text);
+    assert.deepEqual(r.json.unreachableMaps, [2]);
+    assert.equal(r.json.goal.reachable, false);
+    assert.ok(r.json.goal.blockedBy.some((b) => b.includes("switch 5")), JSON.stringify(r.json.goal));
+    assert.deepEqual(r.json.names, { 1: "Town", 2: "Cave" });
+    assert.ok(r.json.graph.includes("%% unreachable: 2"));
+    const verdict = r.json.summary.find((l) => l.includes("map 2"));
+    assert.ok(verdict && /not reachable|unreachable/i.test(verdict) && verdict.includes("switch 5"), r.json.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: each goal shape works", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const sw5 = (await call("analyze_progression", { goal: { switch: 5 } })).json;
+    assert.deepEqual(sw5.goal, { target: "switch 5", reachable: true, blockedBy: [] });
+    const sw6 = (await call("analyze_progression", { goal: { switch: 6 } })).json;
+    assert.equal(sw6.goal.reachable, false);
+    assert.deepEqual(sw6.goal.blockedBy, ["no event ever sets switch 6"]);
+    const map = (await call("analyze_progression", { goal: { mapId: 2 } })).json;
+    assert.deepEqual(map.goal, { target: "map 2", reachable: true, blockedBy: [] });
+    const ev = (await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 2 } } })).json;
+    assert.equal(ev.goal.target, "map 1 event 2");
+    assert.equal(ev.goal.reachable, true);
+    assert.ok(ev.summary.some((l) => l.includes("map 1 event 2")), ev.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: exactly one goal key; bad ids and limits are rejected by the schema", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const bad = [
+      { goal: {} },
+      { goal: { switch: 1, mapId: 1 } },
+      { goal: { switch: 1, event: { mapId: 1, eventId: 1 } } },
+      { goal: { mapId: 1, extra: 1 } },
+      { goal: { switch: 0 } },
+      { goal: { switch: 1.5 } },
+      { goal: { switch: 2147483648 } },
+      { goal: { mapId: -1 } },
+      { goal: { event: { mapId: 1 } } },
+      { goal: { event: { mapId: 1, eventId: 0 } } },
+      { goal: { event: { mapId: 1, eventId: 1, extra: 1 } } },
+      { limit: 0 },
+      { limit: 501 },
+      { limit: 1.5 },
+      { includeGraph: "yes" },
+    ];
+    for (const args of bad) {
+      const r = await call("analyze_progression", args);
+      assert.equal(r.isError, true, JSON.stringify(args));
+    }
+    const two = await call("analyze_progression", { goal: { switch: 1, mapId: 1 } });
+    assert.match(two.text, /exactly one/i);
+    for (const args of [{ goal: { switch: 2147483647 } }, { limit: 1 }, { limit: 500 }]) {
+      const r = await call("analyze_progression", args);
+      assert.equal(r.isError, false, `${JSON.stringify(args)} ${r.text}`);
+    }
+  });
+});
+
+test("analyze_progression: an unknown map goal says so; an unknown event goal names map and event", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const map = await call("analyze_progression", { goal: { mapId: 99 } });
+    assert.equal(map.isError, true);
+    assert.equal(map.text, "Error: map 99 is not listed in MapInfos.json. Use list_maps to see the map ids.");
+    const evMap = await call("analyze_progression", { goal: { event: { mapId: 99, eventId: 1 } } });
+    assert.equal(evMap.isError, true);
+    assert.match(evMap.text, /map 99 is not listed in MapInfos\.json/);
+    const ev = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 77 } } });
+    assert.equal(ev.isError, true);
+    assert.match(ev.text, /event 77 does not exist on map 1/);
+  });
+});
+
+test("analyze_progression: an unreadable map is reported, not thrown", async () => {
+  const spec = { maps: { 1: { events: [null, door(1, 2)] }, 2: null }, mapInfos: [null, { id: 1, name: "A" }, { id: 2, name: "B" }] };
+  await withServer(spec, async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    assert.deepEqual(r.json.reachableMaps, [1, 2]);
+    assert.equal(r.json.uncertainty.confidence, "low");
+    assert.ok(r.json.notes.some((n) => n.includes("could not be read") && n.includes("map 2")), r.json.notes.join("\n"));
+    assert.ok(r.json.summary.some((l) => /confidence is low/i.test(l)), r.json.summary.join("\n"));
+    const ev = await call("analyze_progression", { goal: { event: { mapId: 2, eventId: 1 } } });
+    assert.equal(ev.isError, false, ev.text);
+    assert.equal(ev.json.goal.reachable, false);
+  });
+});
+
+test("analyze_progression: the low-confidence line says why", async () => {
+  const spec = {
+    maps: { 1: { events: [null, npc(1, [c(355, 0, "$gameSwitches.setValue(3, true)"), c(356, 0, "Cmd"), c(201, 0, 1, 5, 6, 7, 0, 0)])] } },
+  };
+  await withServer(spec, async ({ call, fx }) => {
+    await fs.mkdir(path.join(fx.root, "js"), { recursive: true });
+    await fs.writeFile(path.join(fx.root, "js", "plugins.js"), 'var $plugins =\n[{"name":"YEP_Core","status":true,"description":"","parameters":{}}];\n');
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    const line = r.json.summary.find((l) => /confidence is low/i.test(l));
+    assert.ok(line, r.json.summary.join("\n"));
+    assert.ok(/1 script command/.test(line) && /1 plugin command/.test(line) && /1 variable-designated transfer/.test(line), line);
+    assert.ok(line.includes("YEP_Core"), line);
+    assert.ok(r.json.summary.length <= 8);
+  });
+});
+
+test("analyze_progression: counts in the summary stay true when the lists are cut by limit", async () => {
+  const maps = Object.fromEntries([...Array(6).keys()].map((i) => [i + 1, i === 0 ? { events: [null, door(1, 2), door(2, 3), door(3, 4)] } : {}]));
+  await withServer({ maps }, async ({ call }) => {
+    const r = await call("analyze_progression", { limit: 1 });
+    assert.equal(r.isError, false, r.text);
+    assert.equal(r.json.truncated, true);
+    assert.equal(r.json.reachableMaps.length, 1);
+    assert.ok(r.json.summary.some((l) => /4 maps? .*reachable/i.test(l) && /2 .*unreachable|2 cannot/i.test(l)), r.json.summary.join("\n"));
+    assert.ok(r.json.summary.some((l) => /cut|limit/i.test(l)), r.json.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: the description explains the model", async () => {
+  await withServer({}, async ({ client }) => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "analyze_progression");
+    assert.ok(tool);
+    for (const word of ["over-approximation", "plugin", "notetag", "confidence", "unreachable"]) assert.ok(tool.description.includes(word), word);
+    assert.ok(tool.inputSchema.properties.goal);
+  }, { setProject: false });
+});
+
+// ---- release 0.5.0 review fixes ----
+
+/** A switch-gated-free chain of n maps, so the 10 000-round cap is hit without any list being long. */
+function longChain(n) {
+  const maps = {};
+  for (let id = 1; id <= n; id++) maps[id] = { events: [null, ...(id < n ? [door(1, id + 1)] : [])] };
+  return maps;
+}
+
+test("listsCut is true only when a list was really cut at limit, not when an analysis cap was hit", async () => {
+  const index = await buildProjectIndex(memoryProject({ maps: longChain(10_005) }));
+  // The round cap is hit: truncated, but with a huge limit no list is cut.
+  const capped = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER });
+  assert.equal(capped.report.truncated, true);
+  assert.equal(capped.listsCut, false);
+  // With a small limit the lists are cut as well.
+  const both = analyzeProgressionDetailed(index, { limit: 3 });
+  assert.equal(both.report.truncated, true);
+  assert.equal(both.listsCut, true);
+  // Nothing capped, nothing cut.
+  const small = await buildProjectIndex(memoryProject({ maps: longChain(3) }));
+  assert.deepEqual(analyzeProgressionDetailed(small, { limit: 10 }).report.truncated, false);
+  assert.equal(analyzeProgressionDetailed(small, { limit: 10 }).listsCut, false);
+  assert.equal(analyzeProgressionDetailed(small, { limit: 1 }).listsCut, true);
+});
+
+test("summary: an analysis cap says so and does not claim a list was cut at limit", async () => {
+  const index = await buildProjectIndex(memoryProject({ maps: longChain(10_005) }));
+  const { report, listsCut } = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER });
+  assert.equal(listsCut, false);
+  const lines = summarize(report, report, index, 500, listsCut);
+  assert.ok(lines.includes("Results were truncated by an analysis cap (see notes); counts may be approximate."), lines.join("\n"));
+  assert.ok(!lines.some((l) => /cut at limit/.test(l)), lines.join("\n"));
+});
+
+test("summary: a list cut at limit says so and does not blame an analysis cap", async () => {
+  const maps = { 1: { events: [null, door(1, 2)] }, 2: {}, 3: {}, 4: {}, 5: {} };
+  const index = await buildProjectIndex(memoryProject({ maps }));
+  const { report, listsCut } = analyzeProgressionDetailed(index, { limit: 1 });
+  assert.equal(listsCut, true);
+  const full = analyzeProgressionDetailed(index, { limit: Number.MAX_SAFE_INTEGER }).report;
+  const lines = summarize(report, full, index, 1, listsCut);
+  assert.ok(lines.some((l) => l.includes("The lists below are cut at limit 1")), lines.join("\n"));
+  assert.ok(!lines.some((l) => /analysis cap/.test(l)), lines.join("\n"));
+});
+
+test("progressionGraph: bidirectional control characters in map names are stripped from labels", () => {
+  const bidi = "A\u200eB\u200fC\u202aD\u202bE\u202cF\u202dG\u202eH\u2066I\u2067J\u2068K\u2069L";
+  const graph = progressionGraph(baseReport(), new Map([[1, bidi]]));
+  assert.ok(!/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(graph), JSON.stringify(graph));
+  assert.ok(graph.includes('m1["1: A B C D E F G H I J K L"]'), graph);
+});
+
+test("analyze_progression: an event goal on an event with no pages says so, a missing event does not exist", async () => {
+  const spec = { maps: { 1: { events: [null, event(1, []), npc(2, [])] }, 2: {} } };
+  await withServer(spec, async ({ call }) => {
+    const empty = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 1 } } });
+    assert.equal(empty.isError, true);
+    assert.match(empty.text, /event 1 on map 1 has no pages/);
+    assert.doesNotMatch(empty.text, /does not exist/);
+    const missing = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 9 } } });
+    assert.equal(missing.isError, true);
+    assert.match(missing.text, /event 9 does not exist on map 1/);
+    const ok = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 2 } } });
+    assert.equal(ok.isError, false, ok.text);
+  });
+});

@@ -4,6 +4,115 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-25
+
+### Added
+- **5 new tools** (77 in total):
+  - Assets (new profile group `assets`): `import_asset` copies an image or sound from an absolute
+    local path into `img/*` or `audio/*` (type read from the file header, name rules, size caps,
+    `overwrite` keeps the old file in the session backup), `list_assets` lists the files of the 18
+    asset folders with sizes, PNG dimensions, warnings and which places use each file, and
+    `preview_asset` shows a PNG (scaled down) with the sheet layout implied by its name and size.
+  - Analysis (group `analysis`): `find_usages` lists everywhere a switch, variable, item, weapon,
+    armor, skill, state, actor, class, enemy, troop, common event or map is read, written or used,
+    with warnings about dead ends, and `analyze_progression` answers "can the player get from the
+    start map to X, and what can never happen?" for the whole project without running the game
+    (reachable and unreachable maps, dead-end maps, pages that can never run, switches and
+    variables that are never set or never read, an optional goal with the reasons it is blocked,
+    an optional Mermaid map graph and a `confidence` of `high` or `low`).
+- **28 new `build_dialogue_tree` node kinds**:
+  - 13 presentation nodes: `wait`, `fade`, `tint`, `flash`, `shake`, `weather`, `playAudio`,
+    `fadeAudio`, `showPicture`, `erasePicture`, `animation`, `balloon`, `moveRoute`.
+  - 15 game-flow nodes: `battle` (with optional win / escape / lose branches), `shop`,
+    `callCommon`, `label`, `jump`, `exit`, `comment`, `gold`, `item`, `party`, `learnSkill`,
+    `recoverAll`, `nameInput`, `plugin`, `scene`.
+  - Block support for Battle Processing with branches (301 followed by 601-603 and closed by 604) in
+    the command-list checks used by `build_dialogue_tree` and `lint_events`, and in the insertion
+    checks of `build_dialogue_tree` (an `index` inside a battle branch or on a move-route row is
+    refused). Like the editor, a 301 with no branch right after it (neither Can Escape nor Continue
+    when Loss) is a single command, not a block, and `build_dialogue_tree` writes a `battle` node
+    without `canEscape`, `canLose` or an `onWin` body as that lone 301.
+- `simulate_event` understands the new commands: presentation commands (fades, tint, flash,
+  shake, weather, waits, audio, pictures, animations, balloons, move routes) are skipped and
+  counted in the new `cosmetic` field instead of being listed as unsupported; the new
+  `battleResult` input (`win`, `escape` or `lose`, default `win`) picks the Battle Processing
+  branch that runs (a Battle Processing without branches changes nothing and the next command
+  runs); labels and jumps (118/119) work; and the switch ON/OFF steps of a Set Movement
+  Route change the simulated switches.
+- `Project.writeBinary`, the write path for binary files (session backup, tracked by
+  `editor_status`); PNG header helpers (`pngInfo`, `pngIsInterlaced`) in `src/png.ts`; and the
+  project event and reference index (`src/eventIndex.ts`) behind `find_usages` and
+  `analyze_progression`.
+
+### Changed
+- `shopCommands` moved to a leaf module (`src/shopCommands.ts`), which removes an import cycle
+  between `dialogueTree`, `eventTemplates` and `mapTools`; `eventTemplates` still re-exports it.
+- `render_map_image` decides the sprite layout of a character sheet like MV does: a name whose
+  leading run of `!` and `$` characters contains a `$` (`$Boss`, `!$Chest`) is a single-character
+  sheet. Before, only names starting with `$` were.
+- `decodePng` rejects PNG data that inflates to more than its header allows (a PNG with more than
+  4096 trailing bytes after the image data is now rejected), a PNG whose IHDR is not the first
+  chunk, and a second IHDR; it takes an optional `maxPixels` limit (default 64 million).
+- Reserved Windows device names `COM0`-`COM9` and `LPT0`-`LPT9` are rejected in asset names.
+- `src/reference.ts` (the event command reference, also served as a resource and by
+  `event_command_reference`) documents more commands or more exact layouts: 103, 104, 108/408,
+  125-129, 201-203, 205/505, 211-213, 223-225, 231, 236, 241-246, 285, 301/601-604, 314-317, 331
+  and 332.
+- The `js/plugins.js` reader (used by the plugin tools and `validate_project`) is a linear scanner
+  instead of a regular expression.
+
+### Fixed
+- A `js/plugins.js` whose comments contain square brackets, or whose plugin array ends in a trailing
+  comma, could not be parsed: the old reader took everything from the first `[` to the last `]` in
+  the file.
+
+### Security
+- `decodePng` could be fed a PNG decompression bomb: a PNG of about 1.5 MB that inflates to 1.5 GB
+  took `preview_asset` 10 s and 2.8 GB of RAM. Inflating is now bounded by the size the header
+  implies.
+- `import_asset` safety rules: the source must be an absolute local file (no UNC or device paths, no
+  symbolic link), the size cap is checked before the file is read, the file type must match the
+  folder by its header bytes, nothing is written when an import is refused, and it refuses to run
+  inside an open changeset.
+- `preview_asset` refuses images above 16 million pixels: the header size is checked first and the
+  decoder enforces the same limit itself. `list_assets` and `import_asset` read the size from the
+  first IHDR only, and refuse (or flag as unreadable) a PNG that has a second IHDR right after it.
+
+### Known limitations
+- `analyze_progression` is an over-approximation. It ignores conditions inside event commands,
+  scripts, plugin commands, enabled plugins and their notetags, and the start maps of vehicles,
+  and it never models switches turning OFF. "Unreachable" and "never set" claims are reliable only
+  when its `confidence` is `high`; almost every project with custom plugins reports `low`. It does
+  not detect soft-locks, and troop pages without any condition are treated as triggerable.
+- `find_usages` does not index: the Conditional Branch subtypes class, skill, weapon, armor and
+  state (111 with first parameter 4), commands 314, 319, 320, 324, 325, 336 and 339, trait codes,
+  vehicle start maps, damage formulas, notetags and plugin parameters. `\\V[n]` (an escaped
+  backslash) is counted as a read.
+- `import_asset` checks headers only (PNG signature and IHDR; `OggS`; `ftyp`), so for example a HEIC
+  file with an `ftyp` header is accepted as `.m4a`. It does not convert or resize, does not run
+  inside a changeset, and follows symlinks inside the project like all other writes.
+- `list_assets` marks files as unused by exact (case-sensitive) name.
+- Damage formulas are evaluated JavaScript and can set switches and variables (for example through
+  `$gameSwitches`); they are not analysed, so `analyze_progression` can report `confidence: high`
+  while a formula changes state.
+- The project index is built in memory. A hostile or machine-generated project with very large
+  Control Switches / Control Variables (121/122) commands covering whole id ranges can use a lot of
+  memory and time in `find_usages` and `analyze_progression`: a review measured
+  about 1.2 GB for 5000 events whose commands expanded to about 10 million references.
+- The layouts of the new dialogue nodes (236, 246, the 205/505 move-route shape, the 231
+  designation slot, 108/408, 303, 129) come from knowledge of the MV engine, not from engine
+  source. Commands 232-234 and 243/244 are not supported by `build_dialogue_tree`; `find_usages`
+  and `analyze_progression` do read the variable designation of Move Picture (232), using the
+  same parameter layout as 231, which is likewise unverified. That the MV editor writes a Battle
+  Processing (301) without branches when neither box is checked also rests on knowledge of the
+  editor, not on a real project file.
+- No real RPG Maker MV project or engine was available for testing, so nothing in this release was
+  run in the real game.
+- The scripted browser playtest runner (`playtest_scenario`) is still **not** included.
+- The known limitations of 0.4.0 below still apply, except that `simulate_event` now supports
+  labels (118/119) and skips fades and waits (221-225, 230) as cosmetic instead of listing them as
+  unsupported.
+
 ## [0.4.0] - 2026-10-24
 
 ### Added

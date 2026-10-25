@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Project, ProjectError } from "../dist/project.js";
+import { compileDialogue } from "../dist/dialogueTree.js";
 import { lintCommandList, lintProject } from "../dist/lint.js";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
@@ -393,4 +394,33 @@ test("lintProject: a malformed command does not abort the lint of other events",
       ["missing-common-event", 3, 0],
     ]);
   });
+});
+
+// ---- cutscene and battle commands ----
+
+test("a compiled battle block with all branches, nesting and an exit lints clean", () => {
+  const list = [
+    ...compileDialogue([
+      { fade: "out" },
+      { battle: { troopId: 2, canEscape: true, canLose: true,
+        onWin: [{ choices: [{ label: "Loot", then: [{ gold: 50 }] }, { label: "Leave" }] }],
+        onEscape: [{ say: "Phew." }],
+        onLose: [{ say: "Defeated." }, { exit: true }] } },
+      { moveRoute: { target: "player", steps: ["up", { wait: 5 }] } },
+      { fade: "in" },
+    ]),
+    END,
+  ];
+  assert.deepEqual(lint(list), []);
+});
+
+test("a branchless Battle Processing (editor style, no 601-604) followed by commands lints clean", () => {
+  assert.deepEqual(only([c(301, 0, 0, 1, false, false), c(121, 0, 5, 5, 0), c(301, 0, 0, 2, true, false), c(601, 0), c(602, 0), c(604, 0), END], "block-structure"), []);
+});
+
+test("block-structure: a hand-built Battle Processing without its End of Battle is an error at the opener", () => {
+  const f = only([c(301, 0, 0, 1, true, true), c(601, 0), c(401, 1, "won"), c(0, 1), END], "block-structure");
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, "error");
+  assert.equal(f[0].location.index, 0);
 });

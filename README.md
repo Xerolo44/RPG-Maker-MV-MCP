@@ -55,14 +55,21 @@ Ask your assistant things like:
   source, all in the editor's own `js/plugins.js` format.
 - **Playtest control** — launch the game through NW.js (auto-detected from common install
   locations) with stdout/stderr capture, or serve it to a browser via the built-in HTTP server.
-- **Authoring helpers** — `build_dialogue_tree` compiles nested dialogue and choices into
-  correctly indented event commands, `create_event_from_template` builds chests, locked doors,
-  inns, shops, save points and NPCs in one call.
+- **Authoring helpers** — `build_dialogue_tree` compiles nested dialogue and choices, cutscene
+  effects (fades, audio, pictures, move routes, ...) and game-flow commands (battles, shops, items,
+  party, scenes, ...) into correctly indented event commands, `create_event_from_template` builds
+  chests, locked doors, inns, shops, save points and NPCs in one call. See
+  [Cutscene and game-flow nodes](#cutscene-and-game-flow-nodes).
+- **Assets** — `import_asset` copies images and sounds into the project, `list_assets` shows what
+  is there and what uses it, `preview_asset` lets the assistant look at an image. See
+  [Assets](#assets).
 - **Map generation and stamps** — `generate_map` makes seeded dungeons and caves with
   entrance/exit/chest markers; `capture_stamp` / `place_stamp` reuse a hand-built piece of map.
   See [Map generation and stamps](#map-generation-and-stamps).
 - **Analysis** — `audit_assets`, `lint_events` and `simulate_event` check an event or the whole
-  project without launching the game, see [Analysis](#analysis).
+  project without launching the game, see [Analysis](#analysis). `find_usages` shows everywhere an
+  id is read, written or used, and `analyze_progression` asks which maps and events can ever be
+  reached, see [Usage and progression analysis](#usage-and-progression-analysis).
 - **Safety net** — every file is snapshotted to `.mcp-backups/` before its first modification
   each session; `restore_backup` rolls anything back, `validate_project` catches broken
   references before you ship, and [changesets](#changesets-transactional-edits-with-undo) let
@@ -138,7 +145,7 @@ config) — reach for `--http` only if your client specifically requires a URL.
 The server process must stay running for the connector to work — start it in its own
 terminal window before adding the connector, and leave that window open.
 
-## Tool reference (72 tools)
+## Tool reference (77 tools)
 
 | Group | Tools |
 | --- | --- |
@@ -156,7 +163,8 @@ terminal window before adding the connector, and leave that window open.
 | Skill files | `install_skills` |
 | Plugins | `list_plugins`, `configure_plugin`, `add_plugin`, `remove_plugin`, `create_plugin`, `read_plugin`, `write_plugin` |
 | Playtest | `playtest_start`, `playtest_status`, `playtest_log`, `playtest_stop` |
-| Analysis | `audit_assets`, `lint_events`, `simulate_event` |
+| Analysis | `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `analyze_progression` |
+| Assets | `import_asset`, `list_assets`, `preview_asset` |
 | Safety | `list_backups`, `restore_backup`, `validate_project`, `editor_status`, `begin_changeset`, `commit_changeset`, `discard_changeset`, `undo_changeset` |
 
 Every tool description is written for AI consumption: parameter semantics, RPG Maker quirks
@@ -165,7 +173,7 @@ the schema, so assistants can use the server without external documentation.
 
 ### Tool profiles
 
-All 72 tools are registered by default. Some clients cope better with a shorter tool list, so
+All 77 tools are registered by default. Some clients cope better with a shorter tool list, so
 you can register only some tool groups with `--tools` (a comma-separated list) or the
 environment variable `RPGMV_TOOLS`:
 
@@ -175,12 +183,12 @@ claude mcp add rpgmaker-mv -- npx @xerolo44/rpgmaker-mv-mcp --project "/path/to/
 
 Groups: `project`, `database`, `maps`, `tiles`, `render`, `plugins`, `playtest`, `search`,
 `maintenance` (backups, validation, `editor_status` and the changeset tools), `connect`,
-`balance`, `localization`, `authoring`, `generation`, `analysis`. `project` (`set_project`,
+`balance`, `localization`, `authoring`, `generation`, `analysis`, `assets`. `project` (`set_project`,
 `get_project_info`) is always on, `all` (the default) enables everything, and an unknown group
 name makes the server exit with a message. `install_skills`, resources and prompts are always
 available whatever the profile.
 
-Tools per group (71 tools, plus `install_skills`, which is always on = 72):
+Tools per group (76 tools, plus `install_skills`, which is always on = 77):
 
 - `project` (2): `set_project`, `get_project_info`
 - `database` (12): `list_records`, `get_record`, `update_record`, `create_record`, `get_system`, `set_switch_name`, `set_variable_name`, `update_system`, `create_damage_skill`, `create_healing_skill`, `create_buff_skill`, `create_state_skill`
@@ -196,7 +204,8 @@ Tools per group (71 tools, plus `install_skills`, which is always on = 72):
 - `localization` (2): `export_texts`, `import_texts`
 - `authoring` (2): `build_dialogue_tree`, `create_event_from_template`
 - `generation` (4): `generate_map`, `capture_stamp`, `place_stamp`, `list_stamps`
-- `analysis` (3): `audit_assets`, `lint_events`, `simulate_event`
+- `analysis` (5): `audit_assets`, `lint_events`, `simulate_event`, `find_usages`, `analyze_progression`
+- `assets` (3): `import_asset`, `list_assets`, `preview_asset`
 
 ### Changesets (transactional edits with undo)
 
@@ -229,7 +238,7 @@ the `install_skills` tool, so Claude Code loads them automatically in that proje
 
 | Skill | Covers |
 | --- | --- |
-| `rpgmaker-mv-workflow` | Safety rules, data conventions, which tool to use for what |
+| `rpgmaker-mv-workflow` | Safety rules, data conventions, which tool to use for what, assets and analysis before release |
 | `rpgmaker-map-building` | Plan → paint → look → fix loop, layers, tile choice, connecting maps |
 | `rpgmaker-event-writing` | Dialogue, choices, indentation rules, switches, one-time chests, triggers |
 | `rpgmaker-balancing` | Targets, report/simulation workflow, curves, bulk edits with dry runs |
@@ -273,6 +282,76 @@ layers and, by default, the events inside it) to `<project>/.mcp-stamps/<name>.j
 and `list_stamps` shows what you have. Placement replaces the rectangle on every layer, re-shapes
 autotile edges against the surroundings and never clips; there is no rotate or mirror.
 
+## Assets
+
+Three tools handle the project's image and sound files (`img/*` and `audio/*`, 18 folders):
+
+- `import_asset {source, folder, name?, overwrite?}` copies a file from your computer into
+  `<project>/<folder>/<name>.<ext>`. `source` must be an absolute path to a regular file on a local
+  drive (no relative paths, network shares, devices or symbolic links). The file type is read from
+  the file's **header only** and must fit the folder: `img/*` takes files with a PNG signature and
+  header, `audio/*` takes files that start with `OggS` (Ogg) or have an `ftyp` box (M4A). The
+  extension is chosen from what the header says, never from the source name. Nothing is converted
+  or resized, and the rest of the file is not checked. Size caps are 32 MiB for images and 128 MiB
+  for audio.
+- `list_assets {folder?, includeUsage?, limit?}` lists the files of one or all folders with size,
+  PNG dimensions, warnings (a header that does not match the extension, a sheet size that does not
+  fit the folder, interlaced PNGs) and, for the folders the reference scan covers, `usedBy` and
+  `unused`. Unused means no reference with exactly that name (case-sensitive) in the database, maps,
+  common events or troops; a plugin or script that loads a file by name is not seen.
+- `preview_asset {folder, name, maxSize?}` returns a PNG from an `img/*` folder as an image
+  (nearest-neighbour scaled to at most `maxSize` pixels on its longer edge), with the sheet layout
+  implied by the name for `img/characters` and `img/faces`. Interlaced PNGs, files over 32 MiB and
+  images above 16 million pixels are refused; audio cannot be previewed.
+
+**Name rules.** A name is 1-64 characters from `A-Z a-z 0-9 space _ ! $ ( ) -`, starts with a
+letter, digit, `!` or `$`, has no trailing space, no dot (the extension is added for you) and no
+path separators, and is not a reserved Windows device name (`CON`, `NUL`, `COM1`, `LPT1`, ...). In
+`img/characters`, a name whose leading run of `!` and `$` characters contains a `$` (`$Boss`,
+`!$Chest`) is a one-character sheet; a `!` means no vertical offset on the map.
+
+**Backups and changesets.** An existing file with the same name (letter case ignored) is only
+replaced with `overwrite: true`, and the old file goes to the session backup in `.mcp-backups/` like
+any other edit (`list_backups`, `restore_backup`). Binary files cannot be staged, so `import_asset`
+is refused while a changeset is open; commit or discard it first. Nothing is written when an import
+is refused. For audio, a warning tells you when the `.ogg` or `.m4a` twin is missing (MV's web
+build needs both).
+
+## Cutscene and game-flow nodes
+
+Besides dialogue, choices, conditions, switches, variables and transfers, `build_dialogue_tree`
+compiles these nodes into correctly indented commands:
+
+- **Cutscene:** `wait`, `fade` (out / in), `tint`, `flash`, `shake`, `weather`, `playAudio`,
+  `fadeAudio`, `showPicture`, `erasePicture`, `animation`, `balloon` and `moveRoute`. A route is a
+  list of steps (`up`, `turnLeft`, `{wait: 10}`, `{jump: {x, y}}`, `{switchOn: 5}`, `{speed: 4}`,
+  ...); a repeating route (`repeat: true`) never finishes, so it cannot be waited for and an
+  explicit `wait: true` is rejected.
+- **Game flow:** `battle` (`onWin`, `onEscape` and `onLose` bodies; like the editor, the branches
+  and their closer are written only when `canEscape` or `canLose` is on, or `onWin` has nodes, and
+  with neither the battle is a single command followed by whatever comes next; a body for a branch
+  whose box is off is rejected), `shop`, `callCommon`, `label` / `jump`, `exit`, `comment`,
+  `gold`, `item` (items, weapons and armors), `party`, `learnSkill`, `recoverAll`, `nameInput`,
+  `plugin` (a plugin command line) and `scene` (menu, save, game over, title).
+
+Example, as the `tree` argument (or with `dryRun: true` to only look at the commands):
+
+```json
+[
+  { "fade": "out" },
+  { "battle": { "troopId": 3, "canLose": true,
+      "onWin": [{ "gold": 200 }],
+      "onLose": [{ "say": "Defeated..." }, { "scene": "gameOver" }] } },
+  { "fade": "in" },
+  { "shop": { "goods": [{ "type": "item", "id": 1 }, { "type": "weapon", "id": 2, "price": 300 }] } }
+]
+```
+
+`simulate_event` can dry-run the result: presentation commands are skipped and counted in
+`cosmetic`, and `battleResult` (`win`, `escape` or `lose`) chooses which battle branch runs. The
+command layouts come from knowledge of the MV engine, not from its source, so playtest important
+events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
+
 ## Analysis
 
 Checks that need no running game:
@@ -291,11 +370,57 @@ Checks that need no running game:
   (switches, variables, self switches, gold, items, answers to choices) and returns the messages
   shown, the changes made, the transfer it ends in and the commands it could not simulate. It
   covers messages, choices, conditions, loops, common events, switch/variable/self switch/gold/item
-  changes, transfers and plugin commands; scripts, audio, pictures, movement and so on are listed
-  as unsupported and skipped. It never touches the project.
+  changes, transfers, plugin commands, labels and jumps; battles run the branch chosen by
+  `battleResult` (`win`, `escape` or `lose`, default win); animations and balloons (212, 213),
+  screen fades, tint, flash and shake (221-225), waits (230), show/erase picture (231, 235),
+  weather (236), play/fade audio (241, 242, 245, 246, 249, 250, 251) and move routes (205) are
+  ignored and only counted in `cosmetic` (the switch ON/OFF steps of a move route still apply);
+  scripts, picture moves (232-234) and other commands are listed as unsupported and skipped. It
+  never touches the project.
 - `editor_status` — reports whether the RPG Maker editor process appears to be running (Windows
   only; `null` elsewhere) and which files this server wrote have since been modified by something
   else, usually the editor saving over them. It only reports.
+
+## Usage and progression analysis
+
+Both tools read the whole project (staged changeset data included) and never run the game.
+
+- `find_usages {kind, id, limit?}` lists every place one switch, variable, item, weapon, armor,
+  skill, state, actor, class, enemy, troop, common event or map is **read**, **written** or
+  **used**, as locations like `Map003 event 5 page 1 command index 12` or `Enemies #4 dropItems`
+  (map, event and common event ids are the real ids, pages are 1-based like the editor, and
+  the command index is the 0-based position that `lint_events` also reports), with exact counts
+  and warnings: a switch or variable that is read but never set (or set but never read), a common event
+  nothing calls, a map nothing transfers to, an id without a name. Use it before renaming, deleting
+  or reusing an id.
+- `analyze_progression {goal?, includeGraph?, limit?}` follows the game from the start map and
+  reports the reachable and unreachable maps, maps with no way out, event pages that can never
+  run (with the first condition that is never met), switches and variables that are read but never
+  set or set but never read, and a summary in plain language. `goal` (`{switch}`, `{mapId}` or
+  `{event: {mapId, eventId}}`) adds a verdict with the reasons it is blocked, and `includeGraph`
+  adds a Mermaid flowchart of the map transfers.
+
+**What the analysis can prove.** It is an over-approximation of a playthrough: a page may run
+whenever its page conditions could hold, and when it runs all of its commands take effect. Switches
+only ever turn on and items are never lost. So *unreachable* and *never set* are proofs under that
+model, while *reachable* only means "not ruled out".
+
+**What it cannot see.** Conditions inside event commands (branches, choices), damage formulas (they are
+evaluated JavaScript and can set switches and variables), script commands and
+plugin commands, transfers and battles whose target is a variable, enabled plugins and their
+parameters and notetags (they can call common events, set switches or move the player), and
+vehicles' start maps. It never models switches turning off and does not detect soft-locks.
+`find_usages` does not index every command either; the list is in [CHANGELOG.md](CHANGELOG.md).
+Both tools build the project index in memory: a hostile or machine-generated project with very large
+Control Switches / Variables commands covering whole id ranges can use a lot of memory and time
+(about 1.2 GB were measured for 5000 events expanding to about 10 million references).
+
+**Confidence.** `uncertainty.confidence` is `low` as soon as the project contains script or plugin
+commands, variable-designated transfers or battles, or enabled plugins (or a map or `js/plugins.js`
+it could not read), and the summary says why. It stays `high` when only conditions inside commands
+or damage formulas do something the analysis cannot see. Trust *unreachable* and *dead* results only when it is `high`; almost every project with custom
+plugins reports `low`. The same applies to the "never ..." warnings of `find_usages`, which carry a
+note when script or plugin commands could act on the id.
 
 ## Balancing tools in a nutshell
 

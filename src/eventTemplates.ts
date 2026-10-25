@@ -3,7 +3,11 @@
 import { z } from "zod";
 import { cmd, terminated, type Cmd } from "./commandList.js";
 import { messageCommands } from "./dialogueTree.js";
+import { shopCommands } from "./shopCommands.js";
 import { DEFAULT_EVENT_PAGE } from "./tools/mapTools.js";
+
+// Kept exported from here so existing importers of eventTemplates keep working.
+export { shopCommands };
 
 // ---------------------------------------------------------------- schema
 
@@ -137,7 +141,6 @@ const lines = (text: string): string[] => text.split(/\r?\n/);
 const say = (text: string, indent: number): Cmd[] => messageCommands(lines(text), "", 0, 0, 2, indent);
 
 const CHANGE_CODE = { item: 126, weapon: 127, armor: 128 } as const;
-const SHOP_TYPE = { item: 0, weapon: 1, armor: 2 } as const;
 
 function chest(p: Extract<TemplateParams, { template: "chest" }>): EventPage[] {
   const list = say(p.message ?? "You found treasure!", 0);
@@ -192,15 +195,7 @@ function inn(p: Extract<TemplateParams, { template: "inn" }>): EventPage[] {
 }
 
 function shop(p: Extract<TemplateParams, { template: "shop" }>): EventPage[] {
-  const row = (g: (typeof p.goods)[number]): unknown[] => [
-    SHOP_TYPE[g.type],
-    g.id,
-    g.price === undefined ? 0 : 1,
-    g.price ?? 0,
-  ];
-  const [first, ...rest] = p.goods;
-  const list = [cmd(302, 0, ...row(first), p.purchaseOnly ?? false), ...rest.map((g) => cmd(605, 0, ...row(g)))];
-  return [page(list)];
+  return [page(shopCommands(p.goods, p.purchaseOnly ?? false, 0))];
 }
 
 function npc(p: Extract<TemplateParams, { template: "npc" }>): EventPage[] {

@@ -159,6 +159,12 @@ await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
 ] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
 await call("search_map_events", { query: "of course", searchCommands: true },
   (t) => t.includes('"eventId": 2') && t.includes("command 102"));
+// game-flow and cutscene nodes: a battle block, a shop and audio compile into the Guard event
+await call("build_dialogue_tree", { mapId: 1, eventId: 2, tree: [
+  { playAudio: { kind: "bgm", name: "Battle1" } },
+  { battle: { troopId: 1, canEscape: true, onWin: [{ gold: 50 }], onEscape: [{ say: "Phew." }] } },
+  { shop: { goods: [{ type: "item", id: 1 }, { type: "weapon", id: 1, price: 300 }] } },
+] }, (t) => t.includes('"inserted"') && t.includes('"problems": []'));
 
 // create_event_from_template: a chest on a free tile, then an occupied-tile refusal
 await call("create_event_from_template", { mapId: 1, x: 6, y: 6, template: "chest",
@@ -260,8 +266,33 @@ if (!validation.includes('"errors": []')) { console.log("FAIL validation should 
 // asset audit: Actor1 face/character are referenced but absent; Test_A2 tileset exists
 await call("audit_assets", {}, (t) => t.includes("Actor1"));
 
+// asset import: a tiny PNG from outside the project lands in img/pictures
+{
+  const srcDir = await fs.mkdtemp(path.join(os.tmpdir(), "mv-mcp-smoke-src-"));
+  const src = path.join(srcDir, "SmokePic.png");
+  await fs.writeFile(src, tinyPng);
+  await call("import_asset", { source: src, folder: "img/pictures" },
+    (t) => t.includes('"imported"') && t.includes("img/pictures/SmokePic.png"));
+  await fs.rm(srcDir, { recursive: true, force: true });
+
+  // the imported file shows up in the catalogue (nothing references it) and can be previewed
+  await call("list_assets", { folder: "img/pictures" },
+    (t) => t.includes('"SmokePic"') && t.includes('"unused": true'));
+  const preview = await client.callTool({ name: "preview_asset", arguments: { folder: "img/pictures", name: "SmokePic" } });
+  const previewImg = preview.content?.find((c) => c.type === "image");
+  const previewOk = !preview.isError && previewImg?.mimeType === "image/png"
+    && Buffer.from(previewImg.data, "base64").subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    && preview.content[0].text.includes("SmokePic.png");
+  console.log(`${previewOk ? "PASS" : "FAIL"} preview_asset returns a PNG image`);
+  if (!previewOk) { failures++; console.log("    ", preview.content?.[0]?.text?.slice(0, 300)); }
+}
+
 // lint: the 201 to map 99 added above targets a map that does not exist
 await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
+
+// usage index: switch 1 ("Opened Chest") of the smoke project
+await call("find_usages", { kind: "switch", id: 1 }, (t) => t.includes('"counts"') && t.includes("Opened Chest"));
+await call("analyze_progression", { includeGraph: true }, (t) => t.includes('"reachableMaps"') && t.includes("flowchart LR"));
 
 // map preview as PNG
 {

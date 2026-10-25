@@ -14,6 +14,7 @@ export const GROUPS = [
   "authoring",
   "generation",
   "analysis",
+  "assets",
 ] as const;
 
 export type Group = (typeof GROUPS)[number];

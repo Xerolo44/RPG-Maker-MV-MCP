@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cmd, terminated, validateCommandList } from "../dist/commandList.js";
+import { battleHasBranches, cmd, terminated, validateCommandList } from "../dist/commandList.js";
 
 const END = cmd(0, 0);
 
@@ -88,4 +88,63 @@ test("reports an inner block left open when the outer sibling arrives", () => {
   assert.equal(problems.length, 1);
   assert.match(problems[0], /index 2/);
   assert.match(problems[0], /111/);
+});
+
+test("validateCommandList accepts a nested 301 block with all branches", () => {
+  const list = [
+    cmd(102, 0, ["Fight"], -1, 0, 2, 0),
+    cmd(402, 0, 0, "Fight"),
+    cmd(301, 1, 0, 1, true, true),
+    cmd(601, 1),
+    cmd(301, 2, 0, 2, false, false), // a branchless battle inside the branch is a single command
+    cmd(602, 1),
+    cmd(603, 1),
+    cmd(604, 1),
+    cmd(404, 0),
+    cmd(0, 0),
+  ];
+  assert.deepEqual(validateCommandList(list), []);
+});
+
+test("validateCommandList reports an unclosed 301, a stray 602 and a 601 at the wrong indent", () => {
+  const unclosed = validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(601, 0), cmd(0, 1), cmd(0, 0)]);
+  assert.equal(unclosed.length, 1);
+  assert.match(unclosed[0], /index 0 \(code 301\).*Battle Processing.*604/);
+  const stray = validateCommandList([cmd(602, 0), cmd(0, 0)]);
+  assert.equal(stray.length, 1);
+  assert.match(stray[0], /index 0 \(code 602\): no matching Battle Processing \(301\) open at indent 0/);
+  const wrong = validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(601, 1), cmd(604, 0), cmd(0, 0)]);
+  assert.ok(wrong.some((p) => /index 1 \(code 601\)/.test(p)), wrong.join("\n"));
+  const strayEnd = validateCommandList([cmd(604, 0), cmd(0, 0)]);
+  assert.match(strayEnd[0], /no matching Battle Processing \(301\)/);
+});
+
+test("a 301 block does not swallow an enclosing choice's siblings", () => {
+  const list = [
+    cmd(102, 0, ["a", "b"], 0),
+    cmd(402, 0, 0, "a"),
+    cmd(301, 1, 0, 1, true, false),
+    cmd(601, 1),
+    cmd(402, 0, 1, "b"),
+    cmd(404, 0),
+    cmd(0, 0),
+  ];
+  const problems = validateCommandList(list);
+  assert.ok(problems.some((p) => /index 2 \(code 301\).*604/.test(p)), problems.join("\n"));
+});
+
+test("a branchless 301 (what the editor writes without Can Escape / Continue when Loss) is a single command", () => {
+  assert.deepEqual(validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(121, 0, 5, 5, 0), cmd(0, 0)]), []);
+  // The block that follows belongs to the second battle, not the first.
+  assert.deepEqual(
+    validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(301, 0, 0, 2, true, false), cmd(601, 0), cmd(602, 0), cmd(604, 0), cmd(0, 0)]),
+    [],
+  );
+  assert.equal(battleHasBranches([cmd(301, 0), cmd(601, 0)], 0), true);
+  assert.equal(battleHasBranches([cmd(301, 0), cmd(601, 1)], 0), false);
+  assert.equal(battleHasBranches([cmd(301, 0), cmd(121, 0)], 0), false);
+  assert.equal(battleHasBranches([cmd(121, 0), cmd(601, 0)], 0), false);
+  // A closer or a branch without its opener stays an error.
+  assert.equal(validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(604, 0), cmd(0, 0)]).length, 1);
+  assert.ok(validateCommandList([cmd(301, 0, 0, 1, false, false), cmd(0, 0), cmd(601, 0), cmd(0, 0)]).length > 0);
 });

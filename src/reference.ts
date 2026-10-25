@@ -6,12 +6,14 @@ MESSAGES
 101 Show Text setup: [faceName, faceIndex, background(0 window,1 dim,2 transparent), position(0 top,1 middle,2 bottom)] — followed by one 401 per text line
 401 Text line: ["the text"]
 102 Show Choices: [["Choice A","Choice B"], cancelType, defaultType, positionType, background] — each branch starts with 402 [index, "text"], cancel branch 403, end 404
-103 Input Number: [variableId, digits]
+103 Input Number: [variableId, digits] — the typed number is stored in the variable
+104 Select Item: [variableId, itemType(1 normal,2 key,3 hidden A,4 hidden B)] — the chosen item id is stored in the variable
 105 Show Scrolling Text: [speed, noFast] — lines follow as 405 ["text"]
 
 FLOW CONTROL
 111 Conditional Branch: params vary by first slot — [0, switchId, 0=ON/1=OFF] switch; [1, varId, 0, value, op(0:=,1:>=,2:<=,3:>,4:<,5:!=)] variable vs constant; [2, "A"|"B"|"C"|"D", 0=ON/1=OFF] self switch; [7, gold, op(0:>=,1:<=,2:<)] gold; [8, itemId] party has item — else branch 411, end 412
 112 Loop (end 413 Repeat Above), 113 Break Loop, 115 Exit Event Processing
+108 Comment: ["first line"] — further lines follow as 408 ["line"]; the engine ignores comments
 117 Common Event: [commonEventId]
 118 Label: ["name"], 119 Jump to Label: ["name"]
 230 Wait: [frames] (60 = 1 second)
@@ -23,41 +25,47 @@ GAME PROGRESSION
 124 Control Timer: [0=start/1=stop, seconds]
 
 PARTY
-125 Change Gold: [operation(0 add,1 sub), operandType(0 const,1 var), value]
-126 Change Items: [itemId, operation, operandType, value]
-127/128 Change Weapons/Armors: [id, op, operandType, value, includeEquip]
-129 Change Party Member: [actorId, 0=add/1=remove, initialize]
+125 Change Gold: [operation(0 add,1 sub), operandType(0 const,1 var), value] — with operandType 1 the value is a variable id
+126 Change Items: [itemId, operation(0 add,1 remove), operandType(0 const,1 var), value]
+127/128 Change Weapons/Armors: [id, op(0 add,1 remove), operandType(0 const,1 var), value, includeEquip] — includeEquip true also takes equipped copies when removing
+129 Change Party Member: [actorId, 0=add/1=remove, initialize] — initialize (1) resets the actor to their database start when adding; ignored when removing
 
 ACTOR
 311 Change HP: [actorType(0 fixed,1 var), actorId, op, operandType, value, allowDeath]
 312 Change MP, 313 Change State: [..., 0=add/1=remove, stateId]
-314 Recover All: [0, 0] (0 = whole party), 315 Change EXP, 316 Change Level, 317 Change Parameter
+314 Recover All: [0, 0] (0 = whole party), 315 Change EXP, 316 Change Level (both [actorType, actorId, op, operandType, value, ...]), 317 Change Parameter: [actorType, actorId, paramId(0 MHP..7 LUK), op, operandType, value] — note the operand type is the fifth entry here, not the fourth; with actorType 1 the actor id is a variable id
 318 Change Skill: [actorType, actorId, 0=learn/1=forget, skillId]
 
 MOVEMENT / MAP
-201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType]
-203 Set Event Location, 204 Scroll Map: [direction, distance, speed]
-205 Set Movement Route: [characterId(-1 player,0 this,N eventId), moveRoute] — visual-only mirror entries use 505
-211 Change Transparency, 212 Show Animation: [characterId, animationId, wait]
-213 Show Balloon Icon: [characterId, balloonId, wait]
+201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType] — with designation 1 the first three entries are variable ids
+202 Set Vehicle Location: [vehicleType(0 boat,1 ship,2 airship), designation(0 direct,1 vars), mapId, x, y] — with designation 1 the last three entries are variable ids
+203 Set Event Location: [characterId(0 this,N eventId), designation(0 direct,1 vars,2 exchange with another event), x, y, direction(0 retain,2,4,6,8)] — with designation 1 x and y are variable ids; with 2 x is the other event id
+204 Scroll Map: [direction, distance, speed]
+205 Set Movement Route: [characterId(-1 player,0 this,N eventId), {list: [routeCommand..., {"code":0,"parameters":[]}], repeat, skippable, wait}] — a routeCommand is {code, parameters, indent: null}: 1 down, 2 left, 3 right, 4 up, 14 jump [x,y], 15 wait [frames], 16-19 turn down/left/right/up, 27/28 switch ON/OFF [id], 29 speed [1-6], 30 frequency [1-5], 31/32 walk anim ON/OFF, 33/34 step anim ON/OFF, 35/36 direction fix ON/OFF, 37/38 through ON/OFF, 39/40 transparent ON/OFF. Each route command (not the terminator) is repeated as a 505 row [routeCommand] at the same indent as the 205
+211 Change Transparency, 212 Show Animation: [characterId(-1 player,0 this,N eventId), animationId, wait]
+213 Show Balloon Icon: [characterId(-1 player,0 this,N eventId), balloonId(1-10), wait]
 216 Change Player Followers, 217 Gather Followers
 
 SCREEN
 221 Fadeout Screen, 222 Fadein Screen
-223 Tint Screen: [[r,g,b,gray], frames, wait]
-224 Flash Screen: [[r,g,b,intensity], frames, wait]
-225 Shake Screen: [power, speed, frames, wait]
+223 Tint Screen: [[r(-255..255),g,b,gray(0..255)], frames, wait]
+224 Flash Screen: [[r(0..255),g,b,intensity(0..255)], frames, wait]
+225 Shake Screen: [power(1-9), speed(1-9), frames, wait]
+236 Set Weather Effect: ["none"|"rain"|"storm"|"snow", power(1-9), frames, wait]
 
 AUDIO / PICTURES
-241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume, pan, pitch}]
-242 Fadeout BGM: [seconds], 251 Stop SE
-231 Show Picture: [pictureId, "name", origin, designation, x, y, scaleX, scaleY, opacity, blendMode]
+241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume(0-100), pitch(50-150), pan(-100..100)}] (an empty name stops/clears the channel)
+242 Fadeout BGM: [seconds], 246 Fadeout BGS: [seconds], 251 Stop SE
+231 Show Picture: [pictureId(1-100), "name", origin(0 upper left,1 center), designation(0 direct,1 vars), x, y, scaleX(%), scaleY(%), opacity(0-255), blendMode(0 normal,1 add,2 multiply,3 screen)]
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
-301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — win branch 601, escape 602, lose 603, end 604
+301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — the editor writes branches only when Can Escape or Continue when Loss is on: then 601 If Win, 602 If Escape (with canEscape), 603 If Lose (with canLose), each followed by its body one indent deeper, closed by 604 End of Battle; with both off it is the lone 301 and the commands after it simply run
 302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
+285 Get Location Info: [variableId, infoType(0 terrain tag,1 event id,2-5 tile id of layer 1-4,6 region id), designation(0 direct,1 vars), x, y] — stores the result in the variable; with designation 1 x and y are variable ids
+331 Change Enemy HP: [enemyIndex(-1 all,0..7), op(0 add,1 sub), operandType(0 const,1 var), value, allowDeath]
+332 Change Enemy MP: [enemyIndex, op, operandType, value]
 351 Open Menu Screen, 352 Open Save Screen, 353 Game Over, 354 Return to Title
 
 ADVANCED

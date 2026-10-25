@@ -5,7 +5,10 @@ import { auditAssets } from "../assets.js";
 import { lintProject } from "../lint.js";
 import type { Cmd } from "../commandList.js";
 import { pageConditionsHold, simulateEvent, type SimState } from "../eventSim.js";
+import { buildProjectIndex } from "../eventIndex.js";
+import { findUsages, REF_KINDS, resolveTargetName } from "../usages.js";
 import { safe, textResult } from "../util.js";
+import { registerProgressionTool } from "./progressionTools.js";
 
 const LIST_CAP = 200;
 
@@ -97,14 +100,18 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         "Supported commands: Show Text (101/401), Show Choices (102/402/403/404), Conditional Branch (111/411/412: switch, variable, self switch, gold, item), " +
         "Loop/Break (112/113/413), Exit Event Processing (115), Common Event (117, nested up to 8 deep), comments, Control Switches (121), Control Variables (122: constant, variable and random operands), " +
         "Control Self Switch (123), Change Gold (125), Change Items (126), Transfer Player (201, ends the run) and Plugin Command (356, listed in changes as 'plugin: ...'). " +
-        "Everything else (script 355, audio, pictures, movement, waits, labels, other condition types, game-data operands) is listed in unsupported with its index and skipped; " +
+        "Battle Processing (301) is not fought: the branch picked by battleResult runs (win, escape or lose; default win) and the others are skipped; a missing branch adds 'battle: no <result> branch' to changes. A Battle Processing without branches (what the editor writes when neither Can Escape nor Continue when Loss is on) is a single command: nothing is skipped and the next command runs. " +
+        "Label (118) and Jump to Label (119) work: a jump goes to the first label of that name in the current command list and counts as a step, so a label loop ends 'stepLimit'; a missing label is listed in unsupported and the run continues. " +
+        "Presentation commands (Set Movement Route 205, animation and balloon 212/213, screen fades, tint, flash and shake 221-225, wait 230, show/erase picture 231/235, weather 236, play/fade audio 241/242/245/246/249/250/251, 505 route rows) are ignored and only counted in cosmetic, not listed in unsupported; " +
+        "the one exception is the switch ON/OFF steps of a Set Movement Route, which do change the simulated switches (changes: 'switch N → ON (move route)'; only the first 1000 route entries are scanned, each costing one step, and a longer route adds an unsupported note). A battleResult of escape or lose on a battle that cannot be escaped or lost still runs the branch but adds a note to changes. " +
+        "Everything else (script 355, other condition types, game-data operands, party and scene commands, ...) is listed in unsupported with its index and skipped; " +
         "an unsupported condition follows unknownCondition: stop (default) ends the run with ended 'unsupported', then/else takes that branch. " +
         "Message text is returned verbatim, control codes unexpanded. Limits: 10000 steps (ended 'stepLimit'), integer variable math (results are floored like the engine, so -7 / 2 gives -4; division or modulo by zero leaves the variable unchanged; a random or variable operand is evaluated once per command). A command that changes several switches or variables adds one changes entry for the whole range. messages, changes and unsupported are each capped at 2000 entries; omitted counts what was dropped (present only then) and finalState stays exact. " +
         "State inputs default to everything OFF/0/empty: switches and variables are keyed by id, selfSwitches by letter A to D, items by item id. " +
         "choices lists the answers to Show Choices in the order they are asked (0-based; a missing answer is 0, an out-of-range one takes the cancel branch). " +
         "page is a 0-based page index; when omitted the highest page whose conditions hold under the supplied state is used (the actor condition counts as met). " +
         "The random operand is seeded (default seed 0), so runs repeat exactly. " +
-        "Returns {messages, changes, transfers, unsupported, ended, finalState, pageUsed}.",
+        "Returns {messages, changes, transfers, unsupported, cosmetic, ended, finalState, pageUsed}.",
       inputSchema: {
         mapId: z.number().int().positive().describe("Map id."),
         eventId: z.number().int().positive().describe("Event id on that map."),
@@ -116,10 +123,11 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         items: z.record(z.string().regex(/^[1-9]\d*$/, "item ids must be positive integers"), z.number().int().min(0)).optional().describe('Items held by id, e.g. {"4": 1}.'),
         choices: z.array(z.number().int().min(0)).max(50).optional().describe("Answers to Show Choices, in the order they are asked."),
         seed: z.number().int().optional().describe("Seed for the random operand (default 0)."),
+        battleResult: z.enum(["win", "escape", "lose"]).optional().describe("How every Battle Processing command ends, which decides the branch that runs (default win)."),
         unknownCondition: z.enum(["then", "else", "stop"]).default("stop").describe("What to do at a condition that cannot be simulated."),
       },
     },
-    safe(async ({ mapId, eventId, page, switches, variables, selfSwitches, gold, items, choices, seed, unknownCondition }) => {
+    safe(async ({ mapId, eventId, page, switches, variables, selfSwitches, gold, items, choices, seed, unknownCondition, battleResult }) => {
       void project.root; // throws the standard "No project selected" error first
       const mapFile = project.mapFile(mapId);
       if (!(await project.exists(mapFile))) throw new ProjectError(`map ${mapId} does not exist. Use list_maps to see the map ids.`);
@@ -162,6 +170,7 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         choices,
         seed,
         unknownCondition,
+        battleResult,
         mapId,
         eventId,
         commonEvents: (id) => {
@@ -172,4 +181,35 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
       return textResult({ ...trace, pageUsed });
     }),
   );
+
+  server.registerTool(
+    "find_usages",
+    {
+      title: "Find usages",
+      description:
+        "Lists everywhere one switch, variable, item, weapon, armor, skill, state, actor, class, enemy, troop, common event or map is read, written or used, " +
+        "and warns about dead ends. Use it before renaming, deleting or reusing an id. " +
+        "reads: page conditions, Conditional Branch (111), variable operands and \\V[n] text escapes; writes: Control Switches/Variables (121/122), Change Items/Weapons/Armors (126-128), Change Party Member (129), Change State/Skill (313/318), set-switch route steps; " +
+        "uses: Transfer Player (201), Common Event (117), Battle Processing (301), shops (302/605), actor commands, enemy drops and actions, class learnings, actor equipment, troop members, item/skill effects, map encounter lists, System startMapId and partyMembers. " +
+        "It reads staged changeset data. Each location is a string: 'Map003 event 5 page 1 command index 12', 'CommonEvent 4 command index 7', 'Troop 2 page 1 command index 3', 'Enemies #4 dropItems', 'System startMapId', 'Map003 encounterList'. " +
+        "Map ids, event ids, common event ids and troop ids are the real ids and pages are 1-based like the editor shows them, but 'command index N' is the 0-based position in the command list (the index lint_events reports). " +
+        "A location without a command index is a page condition. counts are the true totals; each list is cut at limit entries and truncated gives the omitted counts. " +
+        "warnings cover: a switch or variable that is read but never set, or set but never read; a common event never called (autorun and parallel common events are exempt); a map nothing transfers to; and an id with no name or record (unknown id, not an error). " +
+        "Script commands (355), plugin commands (356), variable-designated transfers and battles, notetags and plugin parameters are not understood, so every 'never ...' warning carries a note when the project has script or plugin commands (or truncated range commands) that could act on the id. " +
+        "Only the 121/122 ids up to 1000 per command are indexed.",
+      inputSchema: {
+        kind: z.enum(REF_KINDS).describe("What to look up."),
+        id: z.number().int().min(1).max(2147483647).describe("Id of the switch, variable, database record, common event or map."),
+        limit: z.number().int().min(1).max(500).default(100).describe("Most locations listed per role (reads, writes, uses)."),
+      },
+    },
+    safe(async ({ kind, id, limit }) => {
+      void project.root; // throws the standard "No project selected" error first
+      const index = await buildProjectIndex(project);
+      const name = await resolveTargetName(project, kind, id);
+      return textResult(findUsages(index, { kind, id }, { limit, name }));
+    }),
+  );
+
+  registerProgressionTool(server, project);
 }
