@@ -304,7 +304,9 @@ export function commandRefs(c: Cmd): Ref[] {
       }
       return out;
     }
-    case 231: {
+    case 231:
+    case 232: {
+      // Show / Move Picture share the layout: [pictureId, name, origin, designation, x, y, ...]; designation 1 = variables.
       const out: Ref[] = [];
       if (p[3] === 1) {
         readVar(out, p[4]);

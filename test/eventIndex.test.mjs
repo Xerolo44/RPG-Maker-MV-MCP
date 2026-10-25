@@ -70,6 +70,8 @@ const ROWS = [
   ["127 variable operand", c(127, 0, 4, 1, 1, 9, false), [r("weapon", 4, "write"), r("variable", 9, "read")]],
   ["128 variable operand", c(128, 0, 4, 0, 1, 9, false), [r("armor", 4, "write"), r("variable", 9, "read")]],
   ["231 show picture, variables", c(231, 0, 1, "Pic", 0, 1, 11, 12, 100, 100, 255, 0), [r("variable", 11, "read"), r("variable", 12, "read")]],
+  ["232 move picture, variables (same layout as 231; from knowledge of the engine, not verified)", c(232, 0, 1, "", 0, 1, 11, 12, 100, 100, 255, 0, 60, true), [r("variable", 11, "read"), r("variable", 12, "read")]],
+  ["232 move picture, direct", c(232, 0, 1, "", 0, 0, 11, 12, 100, 100, 255, 0, 60, true), []],
   ["231 show picture, direct", c(231, 0, 1, "Pic", 0, 0, 11, 12, 100, 100, 255, 0), []],
   ["285 get location info, direct", c(285, 0, 5, 0, 0, 3, 4), [r("variable", 5, "write")]],
   ["285 get location info, variables", c(285, 0, 5, 0, 1, 3, 4), [r("variable", 5, "write"), r("variable", 3, "read"), r("variable", 4, "read")]],
