@@ -114,23 +114,26 @@ export function findUsages(
   const plugins = index.hidden.enabledPlugins ?? 0;
   const pluginPart = plugins > 0 ? [`${plugins} enabled plugins`] : [];
   // A script or plugin command or an enabled plugin could do what the index cannot see, and a truncated range hides ids: say so.
-  let doubt = "";
   const unseen = [...(scriptPlugin > 0 ? [`${scriptPlugin} script/plugin commands`] : []), ...pluginPart];
-  if (unseen.length > 0) doubt += ` — note: ${unseen.join(" and ")} in this project could also set or read it.`;
-  if ((target.kind === "switch" || target.kind === "variable") && truncatedRanges > 0) {
-    doubt += ` — note: ${truncatedRanges} range commands longer than 1000 ids were truncated.`;
-  }
+  /** `verb` is what those commands could also do to the target: "set or read" a switch, "call" a common event. */
+  const doubt = (verb: string): string => {
+    let text = unseen.length > 0 ? ` — note: ${unseen.join(" and ")} in this project could also ${verb} it.` : "";
+    if ((target.kind === "switch" || target.kind === "variable") && truncatedRanges > 0) {
+      text += ` — note: ${truncatedRanges} range commands longer than 1000 ids were truncated.`;
+    }
+    return text;
+  };
 
   if (target.kind === "switch" || target.kind === "variable") {
     if (reads.length > 0 && writes.length === 0) {
-      warnings.push(`${label} ${target.id} is read but never set anywhere (always OFF/0 unless a script or plugin sets it)${doubt}`);
+      warnings.push(`${label} ${target.id} is read but never set anywhere (always OFF/0 unless a script or plugin sets it)${doubt("set or read")}`);
     } else if (writes.length > 0 && reads.length === 0) {
-      warnings.push(`${label} ${target.id} is set but never read${doubt}`);
+      warnings.push(`${label} ${target.id} is set but never read${doubt("set or read")}`);
     }
   } else if (target.kind === "commonEvent" && uses.length === 0) {
     // Autorun (1) and parallel (2) common events run on their own switch and need no caller.
     const runsByItself = index.pages.some((p) => p.kind === "commonEvent" && p.eventId === target.id && (p.trigger === 1 || p.trigger === 2));
-    if (!runsByItself) warnings.push(`${label} ${target.id} is never called${doubt}`);
+    if (!runsByItself) warnings.push(`${label} ${target.id} is never called${doubt("call")}`);
   } else if (target.kind === "map" && uses.length === 0) {
     const transferring = scriptPlugin + variableTransfers;
     const movers = [...(transferring > 0 ? [`${transferring} script, plugin or variable-designated transfer commands`] : []), ...pluginPart];

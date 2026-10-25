@@ -292,6 +292,7 @@ await call("lint_events", {}, (t) => t.includes("transfer-missing-map"));
 
 // usage index: switch 1 ("Opened Chest") of the smoke project
 await call("find_usages", { kind: "switch", id: 1 }, (t) => t.includes('"counts"') && t.includes("Opened Chest"));
+await call("analyze_progression", { includeGraph: true }, (t) => t.includes('"reachableMaps"') && t.includes("flowchart LR"));
 
 // map preview as PNG
 {

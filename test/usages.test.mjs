@@ -233,7 +233,9 @@ test("uncertainty suffix: script and plugin commands soften never-set / never-re
     "switch 3 is read but never set anywhere (always OFF/0 unless a script or plugin sets it)" + suffix,
   ]);
   assert.deepEqual(usages(index, "switch", 4, { name: "x" }).warnings, ["switch 4 is set but never read" + suffix]);
-  assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, ["common event 8 is never called" + suffix]);
+  assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, [
+    "common event 8 is never called — note: 3 script/plugin commands in this project could also call it.",
+  ]);
 });
 
 test("uncertainty suffix: truncated ranges apply to switches and variables only; both suffixes combine", () => {
@@ -252,7 +254,9 @@ test("uncertainty suffix: truncated ranges apply to switches and variables only;
   ]);
   assert.deepEqual(usages(index, "variable", 3, { name: "x" }).warnings, ["variable 3 is set but never read" + script + range]);
   // Common events and maps are not affected by range truncation.
-  assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, ["common event 8 is never called" + script]);
+  assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, [
+    "common event 8 is never called — note: 1 script/plugin commands in this project could also call it.",
+  ]);
   assert.deepEqual(
     usages(index, "map", 8, { name: "x" }).warnings,
     ["no event transfers the player here and it is not the start map — note: 1 script, plugin or variable-designated transfer commands in this project could also send the player here."],
@@ -309,6 +313,8 @@ test("find_usages: rejects an unknown kind and a bad id or limit", async () => {
     assert.equal((await call("find_usages", { kind: "monster", id: 1 })).isError, true);
     assert.equal((await call("find_usages", { kind: "switch", id: 0 })).isError, true);
     assert.equal((await call("find_usages", { kind: "switch", id: 1.5 })).isError, true);
+    assert.equal((await call("find_usages", { kind: "switch", id: 2147483648 })).isError, true);
+    assert.equal((await call("find_usages", { kind: "switch", id: 2147483647 })).isError, false);
     assert.equal((await call("find_usages", { kind: "switch", id: 1, limit: 0 })).isError, true);
     assert.equal((await call("find_usages", { kind: "switch", id: 1, limit: 501 })).isError, true);
   });
@@ -453,7 +459,7 @@ test("uncertainty suffix: enabled plugins soften the warnings too", () => {
   index.hidden.scriptCommands = 1;
   index.hidden.variableTransfers = 1;
   assert.deepEqual(usages(index, "commonEvent", 8, { name: "x" }).warnings, [
-    "common event 8 is never called — note: 1 script/plugin commands and 2 enabled plugins in this project could also set or read it.",
+    "common event 8 is never called — note: 1 script/plugin commands and 2 enabled plugins in this project could also call it.",
   ]);
   assert.deepEqual(usages(index, "map", 8, { name: "x" }).warnings, [
     "no event transfers the player here and it is not the start map — note: 2 script, plugin or variable-designated transfer commands and 2 enabled plugins in this project could also send the player here.",

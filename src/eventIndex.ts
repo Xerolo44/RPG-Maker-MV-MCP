@@ -5,7 +5,7 @@
 // enabled plugins in js/plugins.js) is only counted in `hidden`. Page numbers (`page`) are 0-based indexes into the pages array, like lint.
 import type { Cmd } from "./commandList.js";
 import type { Project } from "./project.js";
-import { enabledPluginNames } from "./tools/pluginTools.js";
+import { readEnabledPlugins } from "./tools/pluginTools.js";
 
 export type RefKind =
   | "switch"
@@ -114,6 +114,8 @@ export interface ProjectIndex {
     enabledPlugins: number;
     /** The first 10 of them, in file order. */
     enabledPluginNames: string[];
+    /** js/plugins.js exists but cannot be parsed, so the enabled plugins are unknown (enabledPlugins is then 0). */
+    pluginsUnreadable: boolean;
   };
 }
 
@@ -448,9 +450,12 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
       truncatedRanges: 0,
       enabledPlugins: 0,
       enabledPluginNames: [],
+      pluginsUnreadable: false,
     },
   };
-  const plugins = (await enabledPluginNames(project)).filter((name) => name !== "Community_Basic");
+  const { names, unreadable } = await readEnabledPlugins(project);
+  const plugins = names.filter((name) => name !== "Community_Basic");
+  index.hidden.pluginsUnreadable = unreadable;
   index.hidden.enabledPlugins = plugins.length;
   index.hidden.enabledPluginNames = plugins.slice(0, 10);
   const { refs, pages, hidden } = index;

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { buildProjectIndex } from "../dist/eventIndex.js";
-import { analyzeProgression } from "../dist/progression.js";
+import { analyzeProgression, progressionGraph } from "../dist/progression.js";
 import { mulberry32 } from "../dist/battle.js";
 import { c, END, createFixtureProject, event, page } from "./helpers/fixtureProject.mjs";
+
+const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
 /** Builds a fixture project on disk, indexes it and returns { index, report } for the given options. */
 async function run(spec, opts = {}) {
@@ -29,6 +36,7 @@ function memoryProject(spec) {
   for (const [key, name] of Object.entries(tables)) files.set(`${name}.json`, spec[key] ?? [null]);
   return {
     root: "memory",
+    exists: async () => false, // no js/plugins.js
     dataFile: (name) => name,
     mapFile: (id) => `Map${String(id).padStart(3, "0")}.json`,
     readJson: async (name) => {
@@ -855,4 +863,273 @@ test("after the context cap, a calling page that only becomes able to run later 
   const capped = analyzeProgression(index, { limit: 10, maxContexts: 1 });
   assert.equal(capped.truncated, true);
   assert.deepEqual(capped.reachableMaps, [1, 2, 3]);
+});
+
+// ---- progressionGraph ----
+
+const baseReport = (extra = {}) => ({
+  startMapId: 1,
+  reachableMaps: [1, 2],
+  unreachableMaps: [],
+  deadEndMaps: [],
+  deadPages: [],
+  switches: { neverSet: [], neverRead: [] },
+  variables: { neverSet: [], neverRead: [] },
+  uncertainty: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, confidence: "high" },
+  edges: [{ from: 1, to: 2 }],
+  notes: [],
+  truncated: false,
+  ...extra,
+});
+
+test("progressionGraph: flowchart LR with a node per reachable map and an edge per transfer", () => {
+  const graph = progressionGraph(baseReport(), new Map([[1, "Town"], [2, "Cave"]]));
+  assert.deepEqual(graph.split("\n"), ["flowchart LR", '  m1["1: Town"]', '  m2["2: Cave"]', "  m1 --> m2"]);
+});
+
+test("progressionGraph: unreachable maps are only listed in a comment, never drawn", () => {
+  const graph = progressionGraph(baseReport({ reachableMaps: [1], unreachableMaps: [4, 7], edges: [] }), new Map([[4, "Secret"]]));
+  assert.ok(graph.includes("%% unreachable: 4, 7"), graph);
+  assert.ok(!/m4|m7|Secret/.test(graph), graph);
+  assert.ok(!progressionGraph(baseReport({ unreachableMaps: [] }), new Map()).includes("%% unreachable"));
+});
+
+test("progressionGraph: labels are sanitised (quotes, brackets, backticks, newlines, < > ; %%) and cut to 40 characters", () => {
+  const hostile = 'Evil"]\n  m9["x`<b>y</b>;%% end [a] (b) {c} \\ # & |\r\n';
+  const graph = progressionGraph(baseReport(), new Map([[1, hostile], [2, "A".repeat(100)]]));
+  const lines = graph.split("\n");
+  assert.equal(lines.length, 4, graph);
+  for (const line of lines.slice(1, 3)) {
+    const m = /^ {2}m(\d+)\["([^"]*)"\]$/.exec(line);
+    assert.ok(m, line);
+    assert.ok(m[2].length <= 40, line);
+    assert.ok(!/["'`<>;%[\](){}\\|#&\r\n]/.test(m[2]), line);
+  }
+  assert.ok(lines[1].startsWith('  m1["1: Evil'), lines[1]);
+  assert.equal(/^ {2}m2\["(.*)"\]$/.exec(lines[2])[1], `2: ${"A".repeat(37)}`);
+  assert.ok(!graph.includes("%%"), "no comment can be injected through a name");
+});
+
+test("progressionGraph: a missing name leaves just the id; unlisted transfer targets still get a node", () => {
+  const graph = progressionGraph(baseReport({ reachableMaps: [1], edges: [{ from: 1, to: 9 }] }), new Map());
+  assert.deepEqual(graph.split("\n"), ["flowchart LR", '  m1["1"]', '  m9["9"]', "  m1 --> m9"]);
+});
+
+test("progressionGraph: at most 200 distinct edges, then an omitted-count comment", () => {
+  const maps = Array.from({ length: 251 }, (_, i) => i + 1);
+  const edges = maps.slice(1).map((to) => ({ from: 1, to }));
+  const graph = progressionGraph(baseReport({ reachableMaps: maps, edges: [...edges, ...edges.slice(0, 5)] }), new Map());
+  const lines = graph.split("\n");
+  assert.equal(lines.filter((l) => l.includes("-->")).length, 200);
+  assert.ok(lines.includes("%% 50 more edges omitted"), graph.slice(-200));
+  const exact = progressionGraph(baseReport({ reachableMaps: maps, edges: edges.slice(0, 200) }), new Map());
+  assert.ok(!exact.includes("more edges omitted"));
+});
+
+test("progressionGraph: says so when the report was truncated", () => {
+  assert.ok(progressionGraph(baseReport({ truncated: true }), new Map()).includes("%% the report was truncated, so this graph may be incomplete"));
+  assert.ok(!progressionGraph(baseReport(), new Map()).includes("truncated"));
+});
+
+// ---- the analyze_progression tool ----
+
+const CAVEAT_PART = "This is an over-approximation: it ignores conditions inside event commands and anything done by scripts or plugins";
+
+async function withServer(spec, fn, { setProject = true } = {}) {
+  const fx = await createFixtureProject(spec);
+  const client = new Client({ name: "progression-test", version: "0.0.0" });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [entry], stderr: "ignore" }));
+  const call = async (name, args) => {
+    let res;
+    try {
+      res = await client.callTool({ name, arguments: args });
+    } catch (err) {
+      return { isError: true, text: String(err?.message ?? err), json: null };
+    }
+    const text = res.content?.[0]?.text ?? "";
+    return { isError: !!res.isError, text, json: !res.isError && /^[{[]/.test(text) ? JSON.parse(text) : null };
+  };
+  try {
+    if (setProject) assert.equal((await call("set_project", { path: fx.root })).isError, false);
+    return await fn({ call, fx, client });
+  } finally {
+    await client.close();
+    await fx.cleanup();
+  }
+}
+
+/** Start map 1 with an NPC that sets switch 5 and a door to map 2 gated by it (without the NPC the door is event 1). */
+const gated = (withNpc = true) => ({
+  maps: { 1: { events: [null, ...(withNpc ? [npc(1, [switchOn(5)])] : []), door(withNpc ? 2 : 1, 2, sw(5))] }, 2: {} },
+  mapInfos: [null, { id: 1, name: "Town" }, { id: 2, name: "Cave" }],
+});
+
+test("analyze_progression: no project selected", async () => {
+  await withServer({}, async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, true);
+    assert.match(r.text, /No project selected/);
+  }, { setProject: false });
+});
+
+test("analyze_progression: report fields, names, summary and the caveat; no graph by default", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    const j = r.json;
+    assert.equal(j.startMapId, 1);
+    assert.deepEqual(j.reachableMaps, [1, 2]);
+    assert.deepEqual(j.unreachableMaps, []);
+    for (const key of ["deadEndMaps", "deadPages", "switches", "variables", "uncertainty", "edges", "notes", "truncated", "names", "summary"]) {
+      assert.ok(key in j, `missing ${key}`);
+    }
+    assert.deepEqual(j.edges, [{ from: 1, to: 2 }]);
+    assert.deepEqual(j.names, { 1: "Town", 2: "Cave" });
+    assert.equal("graph" in j, false);
+    assert.equal("goal" in j, false);
+    assert.ok(j.summary.length >= 3 && j.summary.length <= 8, j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => l.includes(CAVEAT_PART)), j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => /plugin/i.test(l) && /notetag/i.test(l) && l.includes(CAVEAT_PART)), "the caveat names plugins and notetags");
+    assert.ok(j.summary.some((l) => /2 maps? .*reachable/i.test(l)), j.summary.join("\n"));
+    assert.ok(j.summary.some((l) => /confidence is high/i.test(l)), j.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: includeGraph returns a Mermaid flowchart with the expected edge", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const r = await call("analyze_progression", { includeGraph: true });
+    assert.equal(r.isError, false, r.text);
+    assert.ok(r.json.graph.startsWith("flowchart LR"), r.json.graph);
+    assert.ok(r.json.graph.includes('m1["1: Town"]'));
+    assert.ok(r.json.graph.includes("m1 --> m2"));
+  });
+});
+
+test("analyze_progression: unreachable maps and an unmet map goal, with blockedBy in the summary", async () => {
+  await withServer(gated(false), async ({ call }) => {
+    const r = await call("analyze_progression", { goal: { mapId: 2 }, includeGraph: true });
+    assert.equal(r.isError, false, r.text);
+    assert.deepEqual(r.json.unreachableMaps, [2]);
+    assert.equal(r.json.goal.reachable, false);
+    assert.ok(r.json.goal.blockedBy.some((b) => b.includes("switch 5")), JSON.stringify(r.json.goal));
+    assert.deepEqual(r.json.names, { 1: "Town", 2: "Cave" });
+    assert.ok(r.json.graph.includes("%% unreachable: 2"));
+    const verdict = r.json.summary.find((l) => l.includes("map 2"));
+    assert.ok(verdict && /not reachable|unreachable/i.test(verdict) && verdict.includes("switch 5"), r.json.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: each goal shape works", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const sw5 = (await call("analyze_progression", { goal: { switch: 5 } })).json;
+    assert.deepEqual(sw5.goal, { target: "switch 5", reachable: true, blockedBy: [] });
+    const sw6 = (await call("analyze_progression", { goal: { switch: 6 } })).json;
+    assert.equal(sw6.goal.reachable, false);
+    assert.deepEqual(sw6.goal.blockedBy, ["no event ever sets switch 6"]);
+    const map = (await call("analyze_progression", { goal: { mapId: 2 } })).json;
+    assert.deepEqual(map.goal, { target: "map 2", reachable: true, blockedBy: [] });
+    const ev = (await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 2 } } })).json;
+    assert.equal(ev.goal.target, "map 1 event 2");
+    assert.equal(ev.goal.reachable, true);
+    assert.ok(ev.summary.some((l) => l.includes("map 1 event 2")), ev.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: exactly one goal key; bad ids and limits are rejected by the schema", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const bad = [
+      { goal: {} },
+      { goal: { switch: 1, mapId: 1 } },
+      { goal: { switch: 1, event: { mapId: 1, eventId: 1 } } },
+      { goal: { mapId: 1, extra: 1 } },
+      { goal: { switch: 0 } },
+      { goal: { switch: 1.5 } },
+      { goal: { switch: 2147483648 } },
+      { goal: { mapId: -1 } },
+      { goal: { event: { mapId: 1 } } },
+      { goal: { event: { mapId: 1, eventId: 0 } } },
+      { goal: { event: { mapId: 1, eventId: 1, extra: 1 } } },
+      { limit: 0 },
+      { limit: 501 },
+      { limit: 1.5 },
+      { includeGraph: "yes" },
+    ];
+    for (const args of bad) {
+      const r = await call("analyze_progression", args);
+      assert.equal(r.isError, true, JSON.stringify(args));
+    }
+    const two = await call("analyze_progression", { goal: { switch: 1, mapId: 1 } });
+    assert.match(two.text, /exactly one/i);
+    for (const args of [{ goal: { switch: 2147483647 } }, { limit: 1 }, { limit: 500 }]) {
+      const r = await call("analyze_progression", args);
+      assert.equal(r.isError, false, `${JSON.stringify(args)} ${r.text}`);
+    }
+  });
+});
+
+test("analyze_progression: an unknown map goal says so; an unknown event goal names map and event", async () => {
+  await withServer(gated(), async ({ call }) => {
+    const map = await call("analyze_progression", { goal: { mapId: 99 } });
+    assert.equal(map.isError, true);
+    assert.equal(map.text, "Error: map 99 is not listed in MapInfos.json. Use list_maps to see the map ids.");
+    const evMap = await call("analyze_progression", { goal: { event: { mapId: 99, eventId: 1 } } });
+    assert.equal(evMap.isError, true);
+    assert.match(evMap.text, /map 99 is not listed in MapInfos\.json/);
+    const ev = await call("analyze_progression", { goal: { event: { mapId: 1, eventId: 77 } } });
+    assert.equal(ev.isError, true);
+    assert.match(ev.text, /event 77 does not exist on map 1/);
+  });
+});
+
+test("analyze_progression: an unreadable map is reported, not thrown", async () => {
+  const spec = { maps: { 1: { events: [null, door(1, 2)] }, 2: null }, mapInfos: [null, { id: 1, name: "A" }, { id: 2, name: "B" }] };
+  await withServer(spec, async ({ call }) => {
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    assert.deepEqual(r.json.reachableMaps, [1, 2]);
+    assert.equal(r.json.uncertainty.confidence, "low");
+    assert.ok(r.json.notes.some((n) => n.includes("could not be read") && n.includes("map 2")), r.json.notes.join("\n"));
+    assert.ok(r.json.summary.some((l) => /confidence is low/i.test(l)), r.json.summary.join("\n"));
+    const ev = await call("analyze_progression", { goal: { event: { mapId: 2, eventId: 1 } } });
+    assert.equal(ev.isError, false, ev.text);
+    assert.equal(ev.json.goal.reachable, false);
+  });
+});
+
+test("analyze_progression: the low-confidence line says why", async () => {
+  const spec = {
+    maps: { 1: { events: [null, npc(1, [c(355, 0, "$gameSwitches.setValue(3, true)"), c(356, 0, "Cmd"), c(201, 0, 1, 5, 6, 7, 0, 0)])] } },
+  };
+  await withServer(spec, async ({ call, fx }) => {
+    await fs.mkdir(path.join(fx.root, "js"), { recursive: true });
+    await fs.writeFile(path.join(fx.root, "js", "plugins.js"), 'var $plugins =\n[{"name":"YEP_Core","status":true,"description":"","parameters":{}}];\n');
+    const r = await call("analyze_progression", {});
+    assert.equal(r.isError, false, r.text);
+    const line = r.json.summary.find((l) => /confidence is low/i.test(l));
+    assert.ok(line, r.json.summary.join("\n"));
+    assert.ok(/1 script command/.test(line) && /1 plugin command/.test(line) && /1 variable-designated transfer/.test(line), line);
+    assert.ok(line.includes("YEP_Core"), line);
+    assert.ok(r.json.summary.length <= 8);
+  });
+});
+
+test("analyze_progression: counts in the summary stay true when the lists are cut by limit", async () => {
+  const maps = Object.fromEntries([...Array(6).keys()].map((i) => [i + 1, i === 0 ? { events: [null, door(1, 2), door(2, 3), door(3, 4)] } : {}]));
+  await withServer({ maps }, async ({ call }) => {
+    const r = await call("analyze_progression", { limit: 1 });
+    assert.equal(r.isError, false, r.text);
+    assert.equal(r.json.truncated, true);
+    assert.equal(r.json.reachableMaps.length, 1);
+    assert.ok(r.json.summary.some((l) => /4 maps? .*reachable/i.test(l) && /2 .*unreachable|2 cannot/i.test(l)), r.json.summary.join("\n"));
+    assert.ok(r.json.summary.some((l) => /cut|limit/i.test(l)), r.json.summary.join("\n"));
+  });
+});
+
+test("analyze_progression: the description explains the model", async () => {
+  await withServer({}, async ({ client }) => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "analyze_progression");
+    assert.ok(tool);
+    for (const word of ["over-approximation", "plugin", "notetag", "confidence", "unreachable"]) assert.ok(tool.description.includes(word), word);
+    assert.ok(tool.inputSchema.properties.goal);
+  }, { setProject: false });
 });

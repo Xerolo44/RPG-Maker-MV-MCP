@@ -477,7 +477,7 @@ test("buildProjectIndex: every database row of the table", async () => {
 test("buildProjectIndex: hidden counters cover all pages, 655 is not counted", async () => {
   await withFixture(fullSpec(), async ({ project }) => {
     const index = await buildProjectIndex(project);
-    assert.deepEqual(index.hidden, { scriptCommands: 1, pluginCommands: 1, variableTransfers: 1, variableBattles: 1, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [] });
+    assert.deepEqual(index.hidden, { scriptCommands: 1, pluginCommands: 1, variableTransfers: 1, variableBattles: 1, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [], pluginsUnreadable: false });
   });
 });
 
@@ -490,7 +490,7 @@ test("buildProjectIndex: hidden commands on an unreachable map and in common eve
     },
     async ({ project }) => {
       const index = await buildProjectIndex(project);
-      assert.deepEqual(index.hidden, { scriptCommands: 2, pluginCommands: 2, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [] });
+      assert.deepEqual(index.hidden, { scriptCommands: 2, pluginCommands: 2, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [], pluginsUnreadable: false });
     },
   );
 });
@@ -594,7 +594,7 @@ test("buildProjectIndex: script-like commands and route scripts count as hidden 
   ];
   await withFixture({ maps: { 1: { events: [null, event(1, [page(commands)])] } } }, async ({ project }) => {
     const index = await buildProjectIndex(project);
-    assert.deepEqual(index.hidden, { scriptCommands: 5, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [] });
+    assert.deepEqual(index.hidden, { scriptCommands: 5, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0, enabledPlugins: 0, enabledPluginNames: [], pluginsUnreadable: false });
     assert.deepEqual(index.refs.filter((x) => x.where.source === "map").map((x) => [x.kind, x.id, x.role, x.where.index]), [
       ["variable", 1, "write", 1],
       ["switch", 3, "write", 2],

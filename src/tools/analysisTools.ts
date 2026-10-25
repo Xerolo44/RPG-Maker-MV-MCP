@@ -8,6 +8,7 @@ import { pageConditionsHold, simulateEvent, type SimState } from "../eventSim.js
 import { buildProjectIndex } from "../eventIndex.js";
 import { findUsages, REF_KINDS, resolveTargetName } from "../usages.js";
 import { safe, textResult } from "../util.js";
+import { registerProgressionTool } from "./progressionTools.js";
 
 const LIST_CAP = 200;
 
@@ -198,7 +199,7 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
         "Only the 121/122 ids up to 1000 per command are indexed.",
       inputSchema: {
         kind: z.enum(REF_KINDS).describe("What to look up."),
-        id: z.number().int().min(1).describe("Id of the switch, variable, database record, common event or map."),
+        id: z.number().int().min(1).max(2147483647).describe("Id of the switch, variable, database record, common event or map."),
         limit: z.number().int().min(1).max(500).default(100).describe("Most locations listed per role (reads, writes, uses)."),
       },
     },
@@ -209,4 +210,6 @@ export function registerAnalysisTools(server: McpServer, project: Project): void
       return textResult(findUsages(index, { kind, id }, { limit, name }));
     }),
   );
+
+  registerProgressionTool(server, project);
 }

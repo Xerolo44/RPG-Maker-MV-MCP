@@ -503,6 +503,10 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
     );
   }
   const { enabledPlugins, enabledPluginNames } = index.hidden;
+  if (index.hidden.pluginsUnreadable === true) {
+    low = true;
+    notes.push("js/plugins.js could not be read, so enabled plugins are unknown");
+  }
   if (enabledPlugins > 0) {
     low = true;
     notes.push(
@@ -582,4 +586,52 @@ export function analyzeProgression(index: ProjectIndex, opts: { goal?: Goal; lim
   if (goalReport !== undefined) report.goal = goalReport;
   report.truncated = truncated;
   return report;
+}
+
+/** Most edges a graph draws. */
+const MAX_GRAPH_EDGES = 200;
+/** Longest node label text. */
+const MAX_LABEL = 40;
+
+/** Label text for a Mermaid node: map names are user data, so nothing that could end the label or start a comment survives. */
+function graphLabel(id: number, name: string | undefined): string {
+  const clean = (name ?? "")
+    .replace(/["'`[\](){}<>;%|\x5c#&]/g, " ")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return Array.from(clean === "" ? String(id) : `${id}: ${clean}`).slice(0, MAX_LABEL).join("");
+}
+
+/**
+ * Mermaid `flowchart LR`: a node per reachable map (`m<ID>["<ID>: <name>"]`) and an arrow per distinct direct transfer
+ * (at most 200, then a `%% N more edges omitted` comment). Unreachable maps are listed in a `%% unreachable:` comment
+ * only. A transfer target that is not a reachable map (a map missing from MapInfos.json) still gets a node.
+ */
+export function progressionGraph(report: ProgressionReport, names: Map<number, string>): string {
+  const seen = new Set<string>();
+  const edges = report.edges.filter((e) => {
+    const key = `${e.from}>${e.to}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const drawn = edges.slice(0, MAX_GRAPH_EDGES);
+  const nodes = [...report.reachableMaps];
+  const known = new Set(nodes);
+  for (const e of drawn) {
+    for (const id of [e.from, e.to]) {
+      if (!known.has(id)) {
+        known.add(id);
+        nodes.push(id);
+      }
+    }
+  }
+  const lines = ["flowchart LR", ...nodes.map((id) => `  m${id}["${graphLabel(id, names.get(id))}"]`)];
+  for (const e of drawn) lines.push(`  m${e.from} --> m${e.to}`);
+  if (edges.length > drawn.length) lines.push(`%% ${edges.length - drawn.length} more edges omitted`);
+  if (report.unreachableMaps.length > 0) lines.push(`%% unreachable: ${report.unreachableMaps.join(", ")}`);
+  if (report.truncated) lines.push("%% the report was truncated, so this graph may be incomplete");
+  return lines.join("\n");
 }
