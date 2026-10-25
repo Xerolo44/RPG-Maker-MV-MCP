@@ -278,9 +278,18 @@ const SCENE_CODES = { menu: 351, save: 352, gameOver: 353, title: 354 } as const
 const MAX_GOLD = 99999999; // $gameParty.maxGold()
 const MAX_ITEM_COUNT = 99; // default $gameParty.maxItems(); the editor's constant operand stops there too
 // A single event-command line (label, plugin command): no NUL, escapes or line breaks.
-const singleLine = (what: string) => z.string().regex(/^[^\u0000-\u001f\u007f]*$/, `${what} must not contain control characters (newlines, NUL, ...)`);
+// NEL and the Unicode line/paragraph separators (U+0085, U+2028, U+2029) count as line breaks too.
+const singleLine = (what: string) =>
+  z.string().regex(/^[^\u0000-\u001f\u007f\u0085\u2028\u2029]*$/, `${what} must not contain control characters (newlines, NUL, ...)`);
 const nonEmptyLine = (what: string) => singleLine(what).min(1, `${what} must not be empty`);
 const actorId = z.number().int().min(1);
+
+/** The rows of a comment: line breaks split it, and trailing empty rows (a final newline) are dropped. */
+function commentLines(value: string | string[]): string[] {
+  const lines = (Array.isArray(value) ? value : [value]).flatMap((l) => l.split(/\r?\n/));
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
 
 const commentSchema = z
   .union([z.string(), z.array(z.string())], {
@@ -291,7 +300,7 @@ const commentSchema = z
     const lines = typeof value === "string" ? [value] : value;
     const fail = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
     if (lines.length === 0) return fail("comment needs at least one line");
-    if (lines.every((l) => l === "")) return fail("comment must not be empty");
+    if (commentLines(value).length === 0) return fail("comment must not be empty");
     // line breaks split the comment into 408 rows and tabs are fine; other control characters are not
     if (lines.some((l) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(l))) {
       fail("comment must not contain control characters (other than line breaks)");
@@ -502,8 +511,7 @@ function leafCommands(n: LeafNode, indent: number): Cmd[] {
   if ("jump" in n) return [cmd(119, indent, n.jump)];
   if ("exit" in n) return [cmd(115, indent)];
   if ("comment" in n) {
-    const lines = (Array.isArray(n.comment) ? n.comment : [n.comment]).flatMap((l) => l.split(/\r?\n/));
-    return lines.map((line, i) => cmd(i === 0 ? 108 : 408, indent, line));
+    return commentLines(n.comment).map((line, i) => cmd(i === 0 ? 108 : 408, indent, line));
   }
   if ("gold" in n) return [cmd(125, indent, n.gold > 0 ? 0 : 1, 0, Math.abs(n.gold))];
   if ("item" in n) {

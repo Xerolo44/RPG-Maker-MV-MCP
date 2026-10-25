@@ -77,6 +77,24 @@ test("scene maps menu / save / gameOver / title to 351-354", () => {
   assert.deepEqual(compiled({ scene: "title" }), [cmd(354, 0)]);
 });
 
+test("comment: a trailing newline does not add an empty 408 row; a newline-only comment is rejected", () => {
+  assert.deepEqual(compiled({ comment: "note\n" }), [cmd(108, 0, "note")]);
+  assert.deepEqual(compiled({ comment: "a\nb\r\n\n" }), [cmd(108, 0, "a"), cmd(408, 0, "b")]);
+  assert.deepEqual(compiled({ comment: ["a", "b\n"] }), [cmd(108, 0, "a"), cmd(408, 0, "b")]);
+  assert.deepEqual(compiled({ comment: "a\n\nb" }), [cmd(108, 0, "a"), cmd(408, 0, ""), cmd(408, 0, "b")]);
+  rejected({ comment: "\n" }, /empty/);
+  rejected({ comment: ["", "\n"] }, /empty/);
+});
+
+test("label, jump and plugin lines reject every kind of line break, including NEL, U+2028 and U+2029", () => {
+  for (const ch of ["\n", "\r", String.fromCharCode(0x85), String.fromCharCode(0x2028), String.fromCharCode(0x2029)]) {
+    rejected({ label: `a${ch}b` }, /control characters/);
+    rejected({ jump: `a${ch}b` }, /control characters/);
+    rejected({ plugin: `Cmd a${ch}b` }, /control characters/);
+  }
+  accepted({ label: "end of scene" });
+});
+
 test("comment: single line is 108, further lines (array or newlines) are 408", () => {
   assert.deepEqual(compiled({ comment: "note" }), [cmd(108, 0, "note")]);
   assert.deepEqual(compiled({ comment: ["one", "two", "three"] }), [cmd(108, 0, "one"), cmd(408, 0, "two"), cmd(408, 0, "three")]);
