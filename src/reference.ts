@@ -6,7 +6,8 @@ MESSAGES
 101 Show Text setup: [faceName, faceIndex, background(0 window,1 dim,2 transparent), position(0 top,1 middle,2 bottom)] — followed by one 401 per text line
 401 Text line: ["the text"]
 102 Show Choices: [["Choice A","Choice B"], cancelType, defaultType, positionType, background] — each branch starts with 402 [index, "text"], cancel branch 403, end 404
-103 Input Number: [variableId, digits]
+103 Input Number: [variableId, digits] — the typed number is stored in the variable
+104 Select Item: [variableId, itemType(1 normal,2 key,3 hidden A,4 hidden B)] — the chosen item id is stored in the variable
 105 Show Scrolling Text: [speed, noFast] — lines follow as 405 ["text"]
 
 FLOW CONTROL
@@ -32,12 +33,14 @@ PARTY
 ACTOR
 311 Change HP: [actorType(0 fixed,1 var), actorId, op, operandType, value, allowDeath]
 312 Change MP, 313 Change State: [..., 0=add/1=remove, stateId]
-314 Recover All: [0, 0] (0 = whole party), 315 Change EXP, 316 Change Level, 317 Change Parameter
+314 Recover All: [0, 0] (0 = whole party), 315 Change EXP, 316 Change Level (both [actorType, actorId, op, operandType, value, ...]), 317 Change Parameter: [actorType, actorId, paramId(0 MHP..7 LUK), op, operandType, value] — note the operand type is the fifth entry here, not the fourth; with actorType 1 the actor id is a variable id
 318 Change Skill: [actorType, actorId, 0=learn/1=forget, skillId]
 
 MOVEMENT / MAP
-201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType]
-203 Set Event Location, 204 Scroll Map: [direction, distance, speed]
+201 Transfer Player: [designation(0 direct,1 vars), mapId, x, y, direction(0 retain,2,4,6,8), fadeType] — with designation 1 the first three entries are variable ids
+202 Set Vehicle Location: [vehicleType(0 boat,1 ship,2 airship), designation(0 direct,1 vars), mapId, x, y] — with designation 1 the last three entries are variable ids
+203 Set Event Location: [characterId(0 this,N eventId), designation(0 direct,1 vars,2 exchange with another event), x, y, direction(0 retain,2,4,6,8)] — with designation 1 x and y are variable ids; with 2 x is the other event id
+204 Scroll Map: [direction, distance, speed]
 205 Set Movement Route: [characterId(-1 player,0 this,N eventId), {list: [routeCommand..., {"code":0,"parameters":[]}], repeat, skippable, wait}] — a routeCommand is {code, parameters, indent: null}: 1 down, 2 left, 3 right, 4 up, 14 jump [x,y], 15 wait [frames], 16-19 turn down/left/right/up, 27/28 switch ON/OFF [id], 29 speed [1-6], 30 frequency [1-5], 31/32 walk anim ON/OFF, 33/34 step anim ON/OFF, 35/36 direction fix ON/OFF, 37/38 through ON/OFF, 39/40 transparent ON/OFF. Each route command (not the terminator) is repeated as a 505 row [routeCommand] at the same indent as the 205
 211 Change Transparency, 212 Show Animation: [characterId(-1 player,0 this,N eventId), animationId, wait]
 213 Show Balloon Icon: [characterId(-1 player,0 this,N eventId), balloonId(1-10), wait]
@@ -53,13 +56,16 @@ SCREEN
 AUDIO / PICTURES
 241 Play BGM / 245 Play BGS / 249 Play ME / 250 Play SE: [{name, volume(0-100), pitch(50-150), pan(-100..100)}] (an empty name stops/clears the channel)
 242 Fadeout BGM: [seconds], 246 Fadeout BGS: [seconds], 251 Stop SE
-231 Show Picture: [pictureId(1-100), "name", origin(0 upper left,1 center), designation(0 direct), x, y, scaleX(%), scaleY(%), opacity(0-255), blendMode(0 normal,1 add,2 multiply,3 screen)]
+231 Show Picture: [pictureId(1-100), "name", origin(0 upper left,1 center), designation(0 direct,1 vars), x, y, scaleX(%), scaleY(%), opacity(0-255), blendMode(0 normal,1 add,2 multiply,3 screen)]
 232 Move Picture, 235 Erase Picture: [pictureId]
 
 SCENES / BATTLE
 301 Battle Processing: [designation(0 direct,1 var,2 random), troopId, canEscape, canLose] — a block like 102/111: optional branches 601 If Win, 602 If Escape (only reachable with canEscape), 603 If Lose (only reachable with canLose), each followed by its body one indent deeper, closed by 604 End of Battle
 302 Shop Processing: [goodsType(0 item,1 weapon,2 armor), id, priceType(0 database price,1 custom), price, purchaseOnly] — extra goods rows as 605 [goodsType, id, priceType, price]
 303 Name Input Processing: [actorId, maxChars]
+285 Get Location Info: [variableId, infoType(0 terrain tag,1 event id,2-5 tile id of layer 1-4,6 region id), designation(0 direct,1 vars), x, y] — stores the result in the variable; with designation 1 x and y are variable ids
+331 Change Enemy HP: [enemyIndex(-1 all,0..7), op(0 add,1 sub), operandType(0 const,1 var), value, allowDeath]
+332 Change Enemy MP: [enemyIndex, op, operandType, value]
 351 Open Menu Screen, 352 Open Save Screen, 353 Game Over, 354 Return to Title
 
 ADVANCED

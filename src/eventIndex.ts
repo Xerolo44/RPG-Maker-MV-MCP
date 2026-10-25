@@ -94,7 +94,14 @@ export interface ProjectIndex {
   startMapId: number;
   partyMembers: number[];
   /** Commands the index cannot resolve, counted over ALL pages (reachable or not). */
-  hidden: { scriptCommands: number; pluginCommands: number; variableTransfers: number; variableBattles: number };
+  hidden: {
+    scriptCommands: number;
+    pluginCommands: number;
+    variableTransfers: number;
+    variableBattles: number;
+    /** 121/122 commands whose id range was longer than 1000 and therefore only partly indexed. */
+    truncatedRanges: number;
+  };
 }
 
 /** Longest 121/122 range expanded per command. */
@@ -116,20 +123,91 @@ function rangeRefs(kind: RefKind, start: unknown, end: unknown, role: RefRole): 
   return out;
 }
 
-/** Event commands (the table in the plan) to references. Pure; tolerates malformed commands. */
+const TEXT_VARIABLE = /\\[Vv]\[(\d+)\]/g;
+/** Most route entries scanned in one 205 command. */
+const MAX_ROUTE_ENTRIES = 1000;
+
+/** Variables named by `\V[n]` escapes in the given strings, each once, in order of appearance. */
+function textVariableRefs(texts: unknown[]): Ref[] {
+  const seen = new Set<number>();
+  const out: Ref[] = [];
+  for (const text of texts) {
+    if (typeof text !== "string" || !text.includes("\\")) continue;
+    for (const m of text.matchAll(TEXT_VARIABLE)) {
+      const id = Number(m[1]);
+      if (isId(id) && !seen.has(id)) {
+        seen.add(id);
+        out.push(ref("variable", id, "read"));
+      }
+    }
+  }
+  return out;
+}
+
+/** The first MAX_ROUTE_ENTRIES route commands of a 205 (empty when the route is malformed). */
+function routeEntries(p: unknown[]): Record<string, unknown>[] {
+  const route = p[1];
+  if (typeof route !== "object" || route === null) return [];
+  const list = (route as Record<string, unknown>).list;
+  if (!Array.isArray(list)) return [];
+  const out: Record<string, unknown>[] = [];
+  for (let i = 0; i < list.length && i < MAX_ROUTE_ENTRIES; i++) {
+    const entry = list[i];
+    if (typeof entry === "object" && entry !== null) out.push(entry as Record<string, unknown>);
+  }
+  return out;
+}
+
+/** Number of script route commands (code 45) in a 205. */
+function routeScriptCount(c: Cmd): number {
+  if (typeof c !== "object" || c === null || c.code !== 205 || !Array.isArray(c.parameters)) return 0;
+  return routeEntries(c.parameters).filter((e) => e.code === 45).length;
+}
+
+/** Adds a variable read when `v` is a valid id. */
+function readVar(out: Ref[], v: unknown): void {
+  if (isId(v)) out.push(ref("variable", v, "read"));
+}
+
+/**
+ * The actor of a 311..318 command: p[0]=0 names the actor, p[0]=1 names a variable holding the actor id.
+ * Adds nothing for any other designation.
+ */
+function actorOrVariable(out: Ref[], p: unknown[]): void {
+  if (!isId(p[1])) return;
+  if (p[0] === 0) out.push(ref("actor", p[1], "use"));
+  else if (p[0] === 1) out.push(ref("variable", p[1], "read"));
+}
+
+/** True when a 121/122 range is valid but longer than MAX_RANGE ids (so only the first MAX_RANGE are indexed). */
+function isTruncatedRange(c: Cmd): boolean {
+  if (typeof c !== "object" || c === null || (c.code !== 121 && c.code !== 122) || !Array.isArray(c.parameters)) return false;
+  const [start, end] = c.parameters;
+  return isId(start) && isId(end) && end - start + 1 > MAX_RANGE;
+}
+
+/** Event commands (the plan's table plus variable operands, designations and text escapes) to references. Pure; tolerates malformed commands. */
 export function commandRefs(c: Cmd): Ref[] {
   if (typeof c !== "object" || c === null) return [];
   const p = c.parameters;
   if (!Array.isArray(p)) return [];
   switch (c.code) {
+    case 102:
+      return Array.isArray(p[0]) ? textVariableRefs(p[0]) : [];
+    case 401:
+    case 405:
+      return textVariableRefs([p[0]]);
+    case 103:
+    case 104:
+      return isId(p[0]) ? [ref("variable", p[0], "write")] : [];
     case 111: {
       switch (p[0]) {
         case 0:
           return isId(p[1]) ? [ref("switch", p[1], "read")] : [];
         case 1: {
           const out: Ref[] = [];
-          if (isId(p[1])) out.push(ref("variable", p[1], "read"));
-          if (p[2] === 1 && isId(p[3])) out.push(ref("variable", p[3], "read"));
+          readVar(out, p[1]);
+          if (p[2] === 1) readVar(out, p[3]);
           return out;
         }
         case 4:
@@ -150,21 +228,89 @@ export function commandRefs(c: Cmd): Ref[] {
       return rangeRefs("switch", p[0], p[1], "write");
     case 122: {
       const out = rangeRefs("variable", p[0], p[1], "write");
-      if (p[3] === 1 && isId(p[4])) out.push(ref("variable", p[4], "read"));
+      if (p[3] === 1) readVar(out, p[4]);
+      return out;
+    }
+    case 125: {
+      const out: Ref[] = [];
+      if (p[1] === 1) readVar(out, p[2]);
       return out;
     }
     case 126:
-      return isId(p[0]) ? [ref("item", p[0], "write")] : [];
     case 127:
-      return isId(p[0]) ? [ref("weapon", p[0], "write")] : [];
-    case 128:
-      return isId(p[0]) ? [ref("armor", p[0], "write")] : [];
+    case 128: {
+      const out: Ref[] = [];
+      if (isId(p[0])) out.push(ref(GOODS[c.code - 126], p[0], "write"));
+      if (p[2] === 1) readVar(out, p[3]);
+      return out;
+    }
     case 129:
       return isId(p[0]) ? [ref("actor", p[0], "write")] : [];
-    case 201:
-      return p[0] === 0 && isId(p[1]) ? [ref("map", p[1], "use")] : [];
-    case 301:
-      return p[0] === 0 && isId(p[1]) ? [ref("troop", p[1], "use")] : [];
+    case 201: {
+      const out: Ref[] = [];
+      if (p[0] === 0) {
+        if (isId(p[1])) out.push(ref("map", p[1], "use"));
+      } else if (p[0] === 1) {
+        readVar(out, p[1]);
+        readVar(out, p[2]);
+        readVar(out, p[3]);
+      }
+      return out;
+    }
+    case 202: {
+      const out: Ref[] = [];
+      if (p[1] === 0) {
+        if (isId(p[2])) out.push(ref("map", p[2], "use"));
+      } else if (p[1] === 1) {
+        readVar(out, p[2]);
+        readVar(out, p[3]);
+        readVar(out, p[4]);
+      }
+      return out;
+    }
+    case 203: {
+      const out: Ref[] = [];
+      if (p[1] === 1) {
+        readVar(out, p[2]);
+        readVar(out, p[3]);
+      }
+      return out;
+    }
+    case 205: {
+      const out: Ref[] = [];
+      for (const e of routeEntries(p)) {
+        if ((e.code === 27 || e.code === 28) && Array.isArray(e.parameters) && isId(e.parameters[0])) {
+          out.push(ref("switch", e.parameters[0], "write"));
+        }
+      }
+      return out;
+    }
+    case 231: {
+      const out: Ref[] = [];
+      if (p[3] === 1) {
+        readVar(out, p[4]);
+        readVar(out, p[5]);
+      }
+      return out;
+    }
+    case 285: {
+      const out: Ref[] = [];
+      if (isId(p[0])) out.push(ref("variable", p[0], "write"));
+      if (p[2] === 1) {
+        readVar(out, p[3]);
+        readVar(out, p[4]);
+      }
+      return out;
+    }
+    case 301: {
+      const out: Ref[] = [];
+      if (p[0] === 0) {
+        if (isId(p[1])) out.push(ref("troop", p[1], "use"));
+      } else if (p[0] === 1) {
+        readVar(out, p[1]);
+      }
+      return out;
+    }
     case 302:
     case 605: {
       const kind = typeof p[0] === "number" ? GOODS[p[0]] : undefined;
@@ -173,14 +319,29 @@ export function commandRefs(c: Cmd): Ref[] {
     case 311:
     case 312:
     case 315:
-    case 316:
-    case 317:
-      return p[0] === 0 && isId(p[1]) ? [ref("actor", p[1], "use")] : [];
+    case 316: {
+      const out: Ref[] = [];
+      actorOrVariable(out, p);
+      if (p[3] === 1) readVar(out, p[4]);
+      return out;
+    }
+    case 317: {
+      const out: Ref[] = [];
+      actorOrVariable(out, p);
+      if (p[4] === 1) readVar(out, p[5]);
+      return out;
+    }
     case 313:
     case 318: {
-      if (p[0] !== 0 || !isId(p[1])) return [];
-      const out = [ref("actor", p[1], "use")];
-      if (isId(p[3])) out.push(ref(c.code === 313 ? "state" : "skill", p[3], "write"));
+      const out: Ref[] = [];
+      actorOrVariable(out, p);
+      if ((p[0] === 0 || p[0] === 1) && isId(p[3])) out.push(ref(c.code === 313 ? "state" : "skill", p[3], "write"));
+      return out;
+    }
+    case 331:
+    case 332: {
+      const out: Ref[] = [];
+      if (p[2] === 1) readVar(out, p[3]);
       return out;
     }
     case 321: {
@@ -209,18 +370,28 @@ export function conditionRefs(c: PageConditions | undefined): Ref[] {
   return out;
 }
 
-/** Commands whose effect is only known at run time. 655 (script continuation) is deliberately not counted. */
+/**
+ * Commands whose effect is only known at run time. 655 (script continuation) and 505 (route rows) are
+ * deliberately not counted. A 205 is "script" when its route holds a script command (code 45).
+ */
 export function hiddenKind(c: Cmd): "script" | "plugin" | "variableTransfer" | "variableBattle" | null {
   if (typeof c !== "object" || c === null) return null;
+  const p = c.parameters;
   switch (c.code) {
     case 355:
       return "script";
     case 356:
       return "plugin";
+    case 111:
+      return Array.isArray(p) && p[0] === 12 ? "script" : null;
+    case 122:
+      return Array.isArray(p) && p[3] === 4 ? "script" : null;
+    case 205:
+      return routeScriptCount(c) > 0 ? "script" : null;
     case 201:
-      return Array.isArray(c.parameters) && c.parameters[0] === 1 ? "variableTransfer" : null;
+      return Array.isArray(p) && p[0] === 1 ? "variableTransfer" : null;
     case 301:
-      return Array.isArray(c.parameters) && (c.parameters[0] === 1 || c.parameters[0] === 2) ? "variableBattle" : null;
+      return Array.isArray(p) && (p[0] === 1 || p[0] === 2) ? "variableBattle" : null;
     default:
       return null;
   }
@@ -252,7 +423,7 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
     unreadableMaps: [],
     startMapId: isInt(sys.startMapId) ? sys.startMapId : 0,
     partyMembers: asArray(sys.partyMembers).filter(isId),
-    hidden: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0 },
+    hidden: { scriptCommands: 0, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0 },
   };
   const { refs, pages, hidden } = index;
 
@@ -270,9 +441,11 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
     pg.list.forEach((command, i) => {
       const found = commandRefs(command);
       if (found.length > 0) addRefs(found, { ...base, index: i });
+      if (isTruncatedRange(command)) hidden.truncatedRanges++;
       switch (hiddenKind(command)) {
         case "script":
-          hidden.scriptCommands++;
+          // A 205 counts once per script route command, every other command once.
+          hidden.scriptCommands += command.code === 205 ? routeScriptCount(command) : 1;
           break;
         case "plugin":
           hidden.pluginCommands++;

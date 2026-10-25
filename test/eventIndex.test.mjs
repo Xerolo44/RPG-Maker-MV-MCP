@@ -31,9 +31,9 @@ const ROWS = [
   ["128 armor", c(128, 0, 4, 0, 0, 1, false), [r("armor", 4, "write")]],
   ["129 actor", c(129, 0, 2, 0, 0), [r("actor", 2, "write")]],
   ["201 direct", c(201, 0, 0, 3, 5, 6, 2, 0), [r("map", 3, "use")]],
-  ["201 variable designation", c(201, 0, 1, 3, 5, 6, 2, 0), []],
+  ["201 variable designation", c(201, 0, 1, 3, 5, 6, 2, 0), [r("variable", 3, "read"), r("variable", 5, "read"), r("variable", 6, "read")]],
   ["301 direct", c(301, 0, 0, 4, false, false), [r("troop", 4, "use")]],
-  ["301 variable designation", c(301, 0, 1, 4, false, false), []],
+  ["301 variable designation", c(301, 0, 1, 4, false, false), [r("variable", 4, "read")]],
   ["301 same as random encounter", c(301, 0, 2, 4, false, false), []],
   ["302 item", c(302, 0, 0, 5, 0, 100, false), [r("item", 5, "use")]],
   ["302 weapon", c(302, 0, 1, 5, 0, 100, false), [r("weapon", 5, "use")]],
@@ -42,10 +42,10 @@ const ROWS = [
   ["605 armor", c(605, 0, 2, 6, 0, 100, false), [r("armor", 6, "use")]],
   ["302 unknown goods type", c(302, 0, 3, 5, 0, 100, false), []],
   ["311 change HP", c(311, 0, 0, 2, 0, 0, 10, false), [r("actor", 2, "use")]],
-  ["311 variable actor", c(311, 0, 1, 2, 0, 0, 10, false), []],
+  ["311 variable actor", c(311, 0, 1, 2, 0, 0, 10, false), [r("variable", 2, "read")]],
   ["312 change MP", c(312, 0, 0, 2, 0, 0, 10), [r("actor", 2, "use")]],
   ["313 change state", c(313, 0, 0, 2, 0, 7), [r("actor", 2, "use"), r("state", 7, "write")]],
-  ["313 variable actor", c(313, 0, 1, 2, 0, 7), []],
+  ["313 variable actor still writes the state", c(313, 0, 1, 2, 0, 7), [r("variable", 2, "read"), r("state", 7, "write")]],
   ["315 change EXP", c(315, 0, 0, 2, 0, 0, 10, false), [r("actor", 2, "use")]],
   ["316 change level", c(316, 0, 0, 2, 0, 0, 1, false), [r("actor", 2, "use")]],
   ["317 change parameter", c(317, 0, 0, 2, 0, 0, 0, 5), [r("actor", 2, "use")]],
@@ -55,7 +55,64 @@ const ROWS = [
   ["303 name input", c(303, 0, 2, 8), [r("actor", 2, "use")]],
   ["a command with no references", c(101, 0, "", 0, 0, 2), []],
   ["the list terminator", END, []],
+
+  // completeness round: variable operands and designations
+  ["201 variable designation with invalid x", c(201, 0, 1, 3, 0, 6, 2, 0), [r("variable", 3, "read"), r("variable", 6, "read")]],
+  ["202 vehicle, direct", c(202, 0, 0, 0, 4, 5, 6), [r("map", 4, "use")]],
+  ["202 vehicle, variables", c(202, 0, 0, 1, 4, 5, 6), [r("variable", 4, "read"), r("variable", 5, "read"), r("variable", 6, "read")]],
+  ["202 vehicle, invalid designation", c(202, 0, 0, 2, 4, 5, 6), []],
+  ["203 event location, variables", c(203, 0, 3, 1, 7, 8, 0), [r("variable", 7, "read"), r("variable", 8, "read")]],
+  ["203 event location, direct", c(203, 0, 3, 0, 7, 8, 0), []],
+  ["203 event location, exchange", c(203, 0, 3, 2, 7, 8, 0), []],
+  ["125 change gold, variable operand", c(125, 0, 0, 1, 6), [r("variable", 6, "read")]],
+  ["125 change gold, constant operand", c(125, 0, 0, 0, 6), []],
+  ["126 variable operand", c(126, 0, 4, 0, 1, 9), [r("item", 4, "write"), r("variable", 9, "read")]],
+  ["127 variable operand", c(127, 0, 4, 1, 1, 9, false), [r("weapon", 4, "write"), r("variable", 9, "read")]],
+  ["128 variable operand", c(128, 0, 4, 0, 1, 9, false), [r("armor", 4, "write"), r("variable", 9, "read")]],
+  ["231 show picture, variables", c(231, 0, 1, "Pic", 0, 1, 11, 12, 100, 100, 255, 0), [r("variable", 11, "read"), r("variable", 12, "read")]],
+  ["231 show picture, direct", c(231, 0, 1, "Pic", 0, 0, 11, 12, 100, 100, 255, 0), []],
+  ["285 get location info, direct", c(285, 0, 5, 0, 0, 3, 4), [r("variable", 5, "write")]],
+  ["285 get location info, variables", c(285, 0, 5, 0, 1, 3, 4), [r("variable", 5, "write"), r("variable", 3, "read"), r("variable", 4, "read")]],
+  ["301 random designation", c(301, 0, 2, 0, false, false), []],
+  ["311 variable operand", c(311, 0, 0, 2, 0, 1, 7, false), [r("actor", 2, "use"), r("variable", 7, "read")]],
+  ["311 variable actor and operand", c(311, 0, 1, 2, 0, 1, 7, false), [r("variable", 2, "read"), r("variable", 7, "read")]],
+  ["312 variable operand", c(312, 0, 0, 2, 0, 1, 7), [r("actor", 2, "use"), r("variable", 7, "read")]],
+  ["315 variable operand", c(315, 0, 0, 2, 0, 1, 7, false), [r("actor", 2, "use"), r("variable", 7, "read")]],
+  ["316 variable operand", c(316, 0, 0, 2, 0, 1, 7, false), [r("actor", 2, "use"), r("variable", 7, "read")]],
+  ["312 constant operand", c(312, 0, 0, 2, 0, 0, 7), [r("actor", 2, "use")]],
+  ["317 variable operand at p[4]", c(317, 0, 0, 2, 3, 0, 1, 8), [r("actor", 2, "use"), r("variable", 8, "read")]],
+  ["317 constant operand", c(317, 0, 0, 2, 3, 0, 0, 8), [r("actor", 2, "use")]],
+  ["317 variable actor", c(317, 0, 1, 2, 3, 0, 0, 8), [r("variable", 2, "read")]],
+  ["315 variable actor", c(315, 0, 1, 2, 0, 1, 7, false), [r("variable", 2, "read"), r("variable", 7, "read")]],
+  ["313 fixed actor with invalid actor id still writes the state", c(313, 0, 0, 0, 0, 7), [r("state", 7, "write")]],
+  ["318 variable actor still writes the skill", c(318, 0, 1, 2, 0, 9), [r("variable", 2, "read"), r("skill", 9, "write")]],
+  ["331 enemy HP, variable operand", c(331, 0, 0, 0, 1, 5, false), [r("variable", 5, "read")]],
+  ["332 enemy MP, variable operand", c(332, 0, 0, 0, 1, 5), [r("variable", 5, "read")]],
+  ["331 enemy HP, constant operand", c(331, 0, 0, 0, 0, 5, false), []],
+  ["103 input number", c(103, 0, 4, 3), [r("variable", 4, "write")]],
+  ["104 select item", c(104, 0, 4, 2), [r("variable", 4, "write")]],
+  ["401 variable escape", c(401, 0, "You have \\V[12] gold"), [r("variable", 12, "read")]],
+  ["401 duplicate escapes are deduplicated", c(401, 0, "\\V[3] \\v[4] \\V[3]"), [r("variable", 3, "read"), r("variable", 4, "read")]],
+  ["401 ignores \\V[0] and \\V[x]", c(401, 0, "\\V[0] \\V[x] \\V[] \\V[99999999999]"), []],
+  ["401 without escapes", c(401, 0, "plain"), []],
+  ["405 variable escape", c(405, 0, "Scroll \\V[7]"), [r("variable", 7, "read")]],
+  ["102 choices escapes", c(102, 0, ["\\V[1] a", "b \\V[2]", "\\V[1]", "none"], 1, 0, 2, 0), [r("variable", 1, "read"), r("variable", 2, "read")]],
+  ["402 labels are skipped", c(402, 0, 0, "\\V[5]"), []],
+  ["403 cancel branch is skipped", c(403, 0, 6, "\\V[5]"), []],
+  ["505 route rows are skipped", c(505, 0, { code: 27, parameters: [4], indent: null }), []],
+  ["205 route switch ON and OFF", c(205, 0, 0, route([27, [4]], [1, []], [28, [5]], [45, ["x"]])), [r("switch", 4, "write"), r("switch", 5, "write")]],
+  ["205 route ignores bad switch ids", c(205, 0, 0, route([27, [0]], [28, ["x"]], [27, []], [27, [-1]])), []],
 ];
+
+/** A move route object as MV stores it, terminated by the code-0 entry. */
+function route(...entries) {
+  return {
+    list: [...entries.map(([code, parameters]) => ({ code, parameters, indent: null })), { code: 0, parameters: [] }],
+    repeat: false,
+    skippable: false,
+    wait: true,
+  };
+}
 
 for (const [name, command, expected] of ROWS) {
   test(`commandRefs: ${name}`, () => assert.deepEqual(commandRefs(command), expected));
@@ -69,6 +126,56 @@ test("commandRefs: ranges are capped at 1000 ids per command", () => {
   const vars = commandRefs(c(122, 0, 5, 1_000_000, 0, 0, 1));
   assert.equal(vars.length, 1000);
   assert.deepEqual(vars[999], r("variable", 1004, "write"));
+});
+
+test("commandRefs: a move route scans at most 1000 entries", () => {
+  const entries = Array.from({ length: 1500 }, (_, i) => [27, [i + 1]]);
+  const refs = commandRefs(c(205, 0, 0, route(...entries)));
+  assert.equal(refs.length, 1000);
+  assert.deepEqual(refs[999], r("switch", 1000, "write"));
+});
+
+test("commandRefs: malformed variants of the new rows never throw", () => {
+  const bad = [
+    c(201, 0, 1),
+    c(201, 0, 1, "x", null, -1),
+    c(202),
+    c(202, 0, 0, 1),
+    c(202, 0, 0, 1, "x", 0, 1e15),
+    c(203, 0, 1, 1),
+    c(125, 0, 0, 1),
+    c(126, 0, 4, 0, 1),
+    c(231, 0, 1, "p", 0, 1),
+    c(285),
+    c(285, 0, "x", 0, 1),
+    c(301, 0, 1),
+    c(311, 0, 1),
+    c(311, 0, 0, 2, 0, 1),
+    c(317, 0, 0, 2, 3, 0, 1),
+    c(331, 0, 0, 0, 1),
+    c(103),
+    c(104, 0, "x"),
+    c(401, 0),
+    c(401, 0, 5),
+    c(405, 0, null),
+    c(102, 0),
+    c(102, 0, "not an array"),
+    c(102, 0, [null, 5, "\\V[3]"]),
+    c(205),
+    c(205, 0, 0),
+    c(205, 0, 0, null),
+    c(205, 0, 0, "route"),
+    c(205, 0, 0, { list: "x" }),
+    c(205, 0, 0, { list: [null, 5, "x", {}, { code: 27 }, { code: 27, parameters: "x" }, { code: 28, parameters: [null] }] }),
+    { code: 205, indent: 0, parameters: null },
+  ];
+  for (const command of bad) assert.doesNotThrow(() => commandRefs(command));
+  assert.deepEqual(commandRefs(c(201, 0, 1)), []);
+  assert.deepEqual(commandRefs(c(201, 0, 1, "x", null, -1)), []);
+  assert.deepEqual(commandRefs(c(202, 0, 0, 1, "x", 0, 1e15)), []);
+  assert.deepEqual(commandRefs(c(205, 0, 0, { list: [null, 5, "x", {}, { code: 27 }, { code: 27, parameters: "x" }, { code: 28, parameters: [null] }] })), []);
+  assert.deepEqual(commandRefs(c(102, 0, [null, 5, "\\V[3]"])), [r("variable", 3, "read")]);
+  for (const command of bad) assert.doesNotThrow(() => hiddenKind(command));
 });
 
 test("commandRefs: an inverted range gives nothing", () => {
@@ -181,6 +288,14 @@ test("hiddenKind classifies commands that cannot be resolved statically", () => 
   assert.equal(hiddenKind(c(301, 0, 2, 0, false, false)), "variableBattle");
   assert.equal(hiddenKind(c(301, 0, 0, 4, false, false)), null);
   assert.equal(hiddenKind(c(121, 0, 1, 1, 0)), null);
+  assert.equal(hiddenKind(c(111, 0, 12, "a > b")), "script");
+  assert.equal(hiddenKind(c(111, 0, 0, 1, 0)), null);
+  assert.equal(hiddenKind(c(122, 0, 1, 1, 0, 4, "a + b")), "script");
+  assert.equal(hiddenKind(c(122, 0, 1, 1, 0, 0, 4)), null);
+  assert.equal(hiddenKind(c(205, 0, 0, route([45, ["this.jump()"]]))), "script");
+  assert.equal(hiddenKind(c(205, 0, 0, route([27, [1]]))), null);
+  assert.equal(hiddenKind(c(205, 0, 0, "bad")), null);
+  assert.equal(hiddenKind(c(505, 0, { code: 45, parameters: ["x"] })), null);
   assert.equal(hiddenKind(null), null);
   assert.equal(hiddenKind({ code: 201 }), null);
   assert.equal(hiddenKind({ code: 301, indent: 0, parameters: "x" }), null);
@@ -286,9 +401,13 @@ test("buildProjectIndex: refs from map events and encounter lists carry exact lo
       { ...r("switch", 3, "write"), where: at(1, 0, 0) },
       { ...r("switch", 4, "write"), where: at(1, 0, 0) },
       { ...r("map", 5, "use"), where: at(1, 0, 1) },
+      { ...r("variable", 1, "read"), where: at(1, 0, 2) }, // 201 designated by variables
+      { ...r("variable", 2, "read"), where: at(1, 0, 2) },
+      { ...r("variable", 3, "read"), where: at(1, 0, 2) },
       { ...r("item", 4, "read"), where: at(1, 2) },
       { ...r("item", 6, "write"), where: at(1, 2, 0) },
       { ...r("troop", 3, "use"), where: at(3, 0, 0) },
+      { ...r("variable", 5, "read"), where: at(3, 0, 1) }, // 301 designated by a variable
     ]);
     const mapPages = index.pages.filter((p) => p.kind === "map");
     assert.deepEqual(mapPages.map((p) => [p.mapId, p.eventId, p.page, p.trigger, p.name]), [
@@ -358,7 +477,7 @@ test("buildProjectIndex: every database row of the table", async () => {
 test("buildProjectIndex: hidden counters cover all pages, 655 is not counted", async () => {
   await withFixture(fullSpec(), async ({ project }) => {
     const index = await buildProjectIndex(project);
-    assert.deepEqual(index.hidden, { scriptCommands: 1, pluginCommands: 1, variableTransfers: 1, variableBattles: 1 });
+    assert.deepEqual(index.hidden, { scriptCommands: 1, pluginCommands: 1, variableTransfers: 1, variableBattles: 1, truncatedRanges: 0 });
   });
 });
 
@@ -371,7 +490,7 @@ test("buildProjectIndex: hidden commands on an unreachable map and in common eve
     },
     async ({ project }) => {
       const index = await buildProjectIndex(project);
-      assert.deepEqual(index.hidden, { scriptCommands: 2, pluginCommands: 2, variableTransfers: 0, variableBattles: 0 });
+      assert.deepEqual(index.hidden, { scriptCommands: 2, pluginCommands: 2, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0 });
     },
   );
 });
@@ -461,6 +580,50 @@ test("buildProjectIndex: sees staged changeset content", async () => {
     const onDisk = JSON.parse(await fs.readFile(path.join(root, "data", "Items.json"), "utf8"));
     assert.deepEqual(onDisk[1].effects, []);
     project.discardChangeset();
+  });
+});
+
+test("buildProjectIndex: script-like commands and route scripts count as hidden scripts, once per route command", async () => {
+  const commands = [
+    c(111, 0, 12, "a > b"),
+    c(122, 0, 1, 1, 0, 4, "1 + 1"),
+    c(205, 0, 0, route([45, ["a()"]], [27, [3]], [45, ["b()"]])),
+    c(505, 0, { code: 45, parameters: ["a()"], indent: null }),
+    c(355, 0, "x"),
+    END,
+  ];
+  await withFixture({ maps: { 1: { events: [null, event(1, [page(commands)])] } } }, async ({ project }) => {
+    const index = await buildProjectIndex(project);
+    assert.deepEqual(index.hidden, { scriptCommands: 5, pluginCommands: 0, variableTransfers: 0, variableBattles: 0, truncatedRanges: 0 });
+    assert.deepEqual(index.refs.filter((x) => x.where.source === "map").map((x) => [x.kind, x.id, x.role, x.where.index]), [
+      ["variable", 1, "write", 1],
+      ["switch", 3, "write", 2],
+    ]);
+  });
+});
+
+test("buildProjectIndex: truncated 121/122 ranges are counted", async () => {
+  const commands = [c(121, 0, 1, 5000, 0), c(122, 0, 1, 1001, 0, 0, 1), c(122, 0, 1, 1000, 0, 0, 1), c(121, 0, 5, 3, 0), c(121, 0, 1, 1e15, 0), END];
+  await withFixture({ maps: { 1: { events: [null, event(1, [page(commands)])] } } }, async ({ project }) => {
+    const index = await buildProjectIndex(project);
+    assert.equal(index.hidden.truncatedRanges, 2); // 1..1e15 is not a valid range (huge id): not counted
+    assert.equal(index.refs.filter((x) => x.kind === "switch").length, 1000);
+    assert.equal(index.refs.filter((x) => x.kind === "variable").length, 2000);
+  });
+});
+
+test("buildProjectIndex: new command rows carry their locations", async () => {
+  const commands = [c(103, 0, 4, 3), c(401, 0, "\\V[12]"), c(285, 0, 6, 0, 1, 7, 8), END];
+  await withFixture({ maps: { 1: { events: [null, event(1, [page(commands)])] } } }, async ({ project }) => {
+    const index = await buildProjectIndex(project);
+    const w = (i) => ({ source: "map", mapId: 1, eventId: 1, page: 0, index: i });
+    assert.deepEqual(index.refs.filter((x) => x.where.source === "map"), [
+      { ...r("variable", 4, "write"), where: w(0) },
+      { ...r("variable", 12, "read"), where: w(1) },
+      { ...r("variable", 6, "write"), where: w(2) },
+      { ...r("variable", 7, "read"), where: w(2) },
+      { ...r("variable", 8, "read"), where: w(2) },
+    ]);
   });
 });
 
