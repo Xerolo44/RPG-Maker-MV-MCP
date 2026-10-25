@@ -323,7 +323,9 @@ build needs both).
 ## Cutscene and game-flow nodes
 
 Besides dialogue, choices, conditions, switches, variables and transfers, `build_dialogue_tree`
-compiles these nodes into correctly indented commands:
+compiles these nodes into correctly indented commands. Like the MV editor, every choice, if/else
+and battle branch ends with a blank `{code: 0}` row at the body's indent (an empty branch is that
+row alone); the engine skips it.
 
 - **Cutscene:** `wait`, `fade` (out / in), `tint`, `flash`, `shake`, `weather`, `playAudio`,
   `fadeAudio`, `showPicture`, `erasePicture`, `animation`, `balloon` and `moveRoute`. A route is a
@@ -352,8 +354,9 @@ Example, as the `tree` argument (or with `dryRun: true` to only look at the comm
 
 `simulate_event` can dry-run the result: presentation commands are skipped and counted in
 `cosmetic`, and `battleResult` (`win`, `escape` or `lose`) chooses which battle branch runs. The
-command layouts were checked against the official MV core scripts, but no real project or editor
-was available, so playtest important events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
+command layouts were checked against the official MV core scripts, and the block and move-route
+structure against real map files from public MV projects, but nothing was run in the real game, so
+playtest important events; see [CHANGELOG.md](CHANGELOG.md) for the limitations.
 
 ## Analysis
 

@@ -21,6 +21,16 @@ All notable changes to this project are documented here. The format follows
   is missing".
 
 ### Changed
+- `build_dialogue_tree` writes the same blank end-of-branch rows as the MV editor: every choice
+  branch (the cancel branch too), every Conditional Branch then and else body and every Battle
+  Processing branch (601/602/603) ends with an empty `{code: 0}` row at the body's indent, and an
+  empty branch consists of that row alone. The engine skips code 0 rows, so playing the event is
+  unchanged. Everything that reads command lists accepts them (`validateCommandList`,
+  `lint_events`, `simulate_event`, the project index, `find_usages`, `analyze_progression`,
+  `check_references`, the `index` insertion rules); `simulate_event` does not count them as steps,
+  so a long loop stops in the same state with or without them. Lists without the rows (older
+  output, hand-written lists, empty branches the editor left bare) stay valid. The templates
+  `locked_door` and `inn` still build their blocks by hand, without the rows.
 - The project index reads an actor's equipment slots like the engine: slot 1 is a weapon slot when
   the actor or its class has the Dual Wield trait (Slot Type, code 55, data 1), and entries beyond
   the slots in System `equipTypes` are ignored. Before, slot 1 always counted as an armor, so
@@ -58,10 +68,21 @@ All notable changes to this project are documented here. The format follows
   205 (its route object), 223-225, 230, 231/232 incl. the variable designation of 232, 235, 236, 242, 246, 301 and its
   branches, 302/605, 303, 313, 314, 318, 351-354, 356, 108/408, 115, 117-119) and of the
   move-route codes, plus the Dual Wield and `equipTypes` handling of actor equipment. That is
-  engine source, not a real project. What is still unchecked: what the RPG Maker MV *editor*
-  writes (in particular a Battle Processing without branches when neither box is checked, and the
-  `505` rows of a move route, which the engine ignores) and the 0.5.0 dialogue-node commands not
-  listed here.
+  engine source.
+- Checked against real data (16 map files from public MV projects, read only, not included in this
+  repository): a Battle Processing with neither box checked is a lone 301 followed directly by the
+  next command (3 samples), and with a box checked it is 301, 601, body, 602, body, 603, body, 604;
+  in 97 real Set Movement Route commands the number of 505 rows equals the number of route steps
+  (without the final `{code: 0}`), each 505 has the indent of its 205 and holds the step object in
+  its first parameter; and every non-empty block body ended with the blank `{code: 0}` row
+  described above (32 of 32), an empty branch being that row alone. Real step objects often omit
+  `parameters` and `indent` for parameterless steps, while ours carry `parameters: []` and
+  `indent: null`; both are valid and both are accepted. `validateCommandList` accepted 266 of the
+  268 real command lists. The two it rejected (one project) have a Battle Processing whose 604
+  closer is missing, which `validateCommandList` and `lint_events` report as a block-structure
+  error. The real data also contained 3 empty branches without the blank row; they stay accepted.
+  Still unchecked: the 0.5.0 dialogue-node commands not listed above, and nothing was run in the
+  real game.
 - As in 0.5.0, no real RPG Maker MV project or editor was available: nothing in this release was
   run in the real game. The limitations of 0.5.0 and 0.4.0 below still apply.
 
