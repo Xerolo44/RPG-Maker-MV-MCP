@@ -108,7 +108,8 @@ function limitationNotes(index: ProjectIndex): string[] {
       "Id 0 means 'none' and is never a reference.",
     "Switches and variables are not checked: they are plain numbers (lint_events reports unnamed ones as info).",
     "Not checked: references made by script commands, plugin commands, notetags, plugin parameters, damage formulas, trait codes, vehicle start maps, " +
-      "commands 314, 319, 320, 324, 325, 336 and 339, and the class, skill, weapon, armor and state tests of Conditional Branch (111) on an actor.",
+      "commands 314, 319, 320, 324, 325, 336 and 339, Control Variables (122) game-data operands (item, weapon, armor and actor counts or parameters), " +
+      "the class, skill, weapon, armor and state tests of Conditional Branch (111) on an actor, the Conditional Branch enemy state test, and enemy action conditions of type state.",
   ];
   const scriptPlugin = h.scriptCommands + h.pluginCommands;
   if (scriptPlugin > 0) {
@@ -131,7 +132,8 @@ function limitationNotes(index: ProjectIndex): string[] {
   if (index.unreadableMaps.length > 0) {
     notes.push(
       `${index.unreadableMaps.length} ${plural(index.unreadableMaps.length, "map", "maps")} listed in MapInfos.json could not be read ` +
-        `(${index.unreadableMaps.slice(0, 10).join(", ")}${index.unreadableMaps.length > 10 ? ", ..." : ""}), so their events and encounter lists were not checked.`,
+        `(${index.unreadableMaps.slice(0, 10).join(", ")}${index.unreadableMaps.length > 10 ? ", ..." : ""}), so their events and encounter lists were not checked, and a transfer to such a map is not reported ` +
+        "(the map is listed in MapInfos.json; validate_project reports the missing file).",
     );
   }
   return notes;

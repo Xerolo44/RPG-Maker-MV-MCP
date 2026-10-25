@@ -227,6 +227,11 @@ test("malformed data does not throw", async () => {
     // Only the one valid out-of-range id is a reference: 2147483647 (the others are not ids)
     assert.deepEqual(r.missing.map((m) => `${m.kind} ${m.id}`), ["item 2147483647"]);
     assert.ok(r.notes.some((n) => n.includes("could not be read")), "unreadable maps are noted");
+    assert.ok(r.notes.some((n) => n.includes("a transfer to such a map is not reported") && n.includes("validate_project")), "unreadable maps: transfers not reported");
+    const text = r.notes.join("\n");
+    assert.match(text, /Control Variables \(122\) game-data operands/);
+    assert.match(text, /Conditional Branch enemy state test/);
+    assert.match(text, /enemy action conditions of type state/);
   });
 });
 
