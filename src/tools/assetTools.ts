@@ -149,7 +149,7 @@ export function registerAssetTools(server: McpServer, project: Project): void {
         "source must be an absolute local path to a regular file (no relative paths, network/UNC shares, devices or symbolic links). " +
         "The type is read from the file's header, never its extension: img/* folders take files with a PNG header (max 32 MiB; only the signature + IHDR is checked, not the whole image), audio/* folders take files whose header is Ogg (OggS) or ISO-BMFF/M4A (ftyp) (max 128 MiB; only the header is checked, not the codec or the full file); the extension (.png, .ogg, .m4a) is chosen from the detected header. " +
         "name defaults to the source file name without its extension and must be 1-64 characters from A-Z a-z 0-9 space _ ! $ ( ) - (no dots, no path); a '$' prefix on a character sheet means one character per sheet, '!' means no offset. " +
-        "An existing file with the same name (letter case ignored) is only replaced with overwrite: true; the old file goes to the session backup (list_backups / restore_backup). " +
+        "An existing file with the same name (letter case ignored) is only replaced with overwrite: true; the session backup (list_backups / restore_backup) keeps the file as it was before this server session first touched it, so a file that was itself created or changed earlier in the same session has no backup of that intermediate version. " +
         "Nothing is converted or resized; warnings flag sheet sizes that do not fit the folder's layout, and for audio a missing sibling format (MV's web build needs both .ogg and .m4a). " +
         "Refused while a changeset is open (binary files cannot be staged): commit or discard it first.",
       inputSchema: {
@@ -177,7 +177,7 @@ export function registerAssetTools(server: McpServer, project: Project): void {
         const where = `${folder}/${existing.name}`;
         if (!existing.isFile) throw new ProjectError(`${where} exists but is not a regular file; it is never replaced.`);
         if (!overwrite) {
-          throw new ProjectError(`${where} already exists. Pass overwrite: true to replace it (the old file is kept in the session backup), or pick another name.`);
+          throw new ProjectError(`${where} already exists. Pass overwrite: true to replace it (the session backup keeps the file as it was before this session), or pick another name.`);
         }
         if (existing.name !== wanted) {
           warnings.push(`Replaced ${existing.name}, whose name differs from "${wanted}" only in letter case; the existing file name was kept.`);
