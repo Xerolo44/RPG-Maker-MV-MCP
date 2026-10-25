@@ -29,8 +29,12 @@ All notable changes to this project are documented here. The format follows
   `lint_events`, `simulate_event`, the project index, `find_usages`, `analyze_progression`,
   `check_references`, the `index` insertion rules); `simulate_event` does not count them as steps,
   so a long loop stops in the same state with or without them. Lists without the rows (older
-  output, hand-written lists, empty branches the editor left bare) stay valid. The templates
-  `locked_door` and `inn` still build their blocks by hand, without the rows.
+  output, hand-written lists, empty branches the editor left bare) stay valid. The
+  `locked_door` and `inn` templates now write the same rows (they share the helper
+  `branchEnd` with the dialogue compiler); the other templates have no blocks.
+- `simulate_event` treats Move Picture (232) as cosmetic, like Show Picture (231) and Erase
+  Picture (235): it is skipped and counted in `cosmetic` instead of being listed as unsupported.
+  Rotate Picture (233) and Tint Picture (234) are still listed as unsupported.
 - The project index reads an actor's equipment slots like the engine: slot 1 is a weapon slot when
   the actor or its class has the Dual Wield trait (Slot Type, code 55, data 1), and entries beyond
   the slots in System `equipTypes` are ignored. Before, slot 1 always counted as an armor, so

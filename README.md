@@ -379,10 +379,10 @@ Checks that need no running game:
   covers messages, choices, conditions, loops, common events, switch/variable/self switch/gold/item
   changes, transfers, plugin commands, labels and jumps; battles run the branch chosen by
   `battleResult` (`win`, `escape` or `lose`, default win); animations and balloons (212, 213),
-  screen fades, tint, flash and shake (221-225), waits (230), show/erase picture (231, 235),
+  screen fades, tint, flash and shake (221-225), waits (230), show/move/erase picture (231, 232, 235),
   weather (236), play/fade audio (241, 242, 245, 246, 249, 250, 251) and move routes (205) are
   ignored and only counted in `cosmetic` (the switch ON/OFF steps of a move route still apply);
-  scripts, picture moves (232-234) and other commands are listed as unsupported and skipped. It
+  scripts, picture rotation and tint (233, 234) and other commands are listed as unsupported and skipped. It
   never touches the project.
 - `editor_status` — reports whether the RPG Maker editor process appears to be running (Windows
   only; `null` elsewhere) and which files this server wrote have since been modified by something
