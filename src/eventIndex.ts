@@ -597,9 +597,24 @@ export async function buildProjectIndex(project: Project): Promise<ProjectIndex>
     }
   };
 
+  // Equipment slots (Game_Actor.equipSlots / initEquips): slot i uses System equipTypes[i + 1], so entries from index
+  // equipTypes.length - 1 on are ignored; slot 1 is a weapon slot when the actor or its class has the Slot Type trait
+  // (code 55) with dataId 1 (Dual Wield) and there are at least two slots. Without a usable equipTypes list every
+  // entry counts; with an unreadable Classes.json only the actor's own traits are known.
+  const equipTypes = Array.isArray(sys.equipTypes) && sys.equipTypes.length >= 2 ? sys.equipTypes : undefined;
+  const slotCount = equipTypes === undefined ? Infinity : equipTypes.length - 1;
+  const classTable = await tryRead(project, "Classes.json");
+  const classTraits = new Map<number, unknown[]>();
+  if (Array.isArray(classTable)) for (const cls of classTable) if (isObj(cls) && isInt(cls.id)) classTraits.set(cls.id, asArray(cls.traits));
+  const hasDualWield = (traits: unknown[]): boolean => traits.some((t) => isObj(t) && t.code === 55 && t.dataId === 1);
+
   await eachRecord("Actors.json", (rec, id) => {
     addUse("class", rec.classId, db("Actors", id, "classId"));
-    asArray(rec.equips).forEach((equip, slot) => addUse(slot === 0 ? "weapon" : "armor", equip, db("Actors", id, "equips")));
+    const dual = slotCount >= 2 && (hasDualWield(asArray(rec.traits)) || (isInt(rec.classId) && hasDualWield(classTraits.get(rec.classId) ?? [])));
+    asArray(rec.equips).forEach((equip, slot) => {
+      if (slot >= slotCount) return;
+      addUse(slot === 0 || (slot === 1 && dual) ? "weapon" : "armor", equip, db("Actors", id, "equips"));
+    });
   });
   await eachRecord("Classes.json", (rec, id) => {
     for (const l of asArray(rec.learnings)) if (isObj(l)) addUse("skill", l.skillId, db("Classes", id, "learnings"));
